@@ -1,0 +1,27 @@
+# ─── Configurazione automatica per Render.com ───
+# Quando colleghi il repo, Render legge questo file e configura tutto.
+services:
+  - type: web
+    name: toto-calcio-2026
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn wsgi:app --workers 2 --threads 4 --timeout 60 --bind 0.0.0.0:$PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true       # Render genera una chiave sicura da solo
+      - key: PRODUCTION
+        value: "1"
+      - key: FOOTBALL_DATA_KEY
+        sync: false               # opzionale, lo inserisci dal pannello
+
+    # ─── DATABASE PERSISTENTE (consigliato, richiede piano a pagamento) ───
+    # Sul piano FREE il disco NON è disponibile: i dati si azzerano a ogni
+    # riavvio/deploy. Per conservarli, passa a un piano a pagamento e
+    # DE-COMMENTA le righe sotto + aggiungi  DB_PATH=/var/data/toto_calcio.db
+    #
+    # disks:
+    #   - name: data
+    #     mountPath: /var/data
+    #     sizeGB: 1

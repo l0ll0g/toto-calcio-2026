@@ -2137,6 +2137,21 @@ function html_admin() {
         <div id="admin-matches-list" class="space-y-2"></div>
       </div>
 
+      <!-- Utenti registrati -->
+      <div class="glass rounded-2xl p-5 mb-5">
+        <div class="flex items-center justify-between mb-4">
+          <div class="font-display text-lg text-white tracking-wide">
+            <i class="fa-solid fa-users text-gold mr-2"></i>UTENTI REGISTRATI
+            <span id="admin-users-count" class="text-white/30 text-sm ml-2"></span>
+          </div>
+          <button id="admin-users-refresh" class="px-2.5 py-1.5 rounded-lg text-xs text-white/60" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1)"><i class="fa-solid fa-rotate"></i></button>
+        </div>
+        <p class="text-white/40 text-sm mb-4">Tutti gli iscritti al sito, anche chi non ha ancora pronosticato o non è in nessuna lega.</p>
+        <div id="admin-users-list" class="space-y-2">
+          <div class="text-white/30 text-sm text-center py-4"><i class="fa-solid fa-spinner spinner mr-2"></i>Caricamento…</div>
+        </div>
+      </div>
+
       <!-- Special results (capocannoniere + finale) -->
       <div class="glass rounded-2xl p-5 mb-5">
         <div class="font-display text-lg text-white tracking-wide mb-4">
@@ -2196,8 +2211,48 @@ function html_admin() {
 
 let adminGroup = 'A';
 
+function renderAdminUsers(data) {
+  const box = document.getElementById('admin-users-list');
+  const cnt = document.getElementById('admin-users-count');
+  if (!box) return;
+  const users = (data && data.users) || [];
+  if (cnt) cnt.textContent = `(${data.count || users.length})`;
+  if (!users.length) { box.innerHTML = '<div class="text-white/30 text-sm text-center py-4">Nessun utente registrato.</div>'; return; }
+  box.innerHTML = users.map(u => `
+    <div class="flex items-center gap-3 px-3 py-2.5 rounded-lg" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06)">
+      <span class="text-xl flex-shrink-0">${u.avatar}</span>
+      <div class="flex-1 min-w-0">
+        <div class="text-white text-sm font-semibold truncate">
+          ${u.nickname}${u.is_admin?' <span class="text-xs" style="color:#C8A44A">(admin)</span>':''}
+        </div>
+        <div class="text-white/35 text-xs truncate">${u.email}</div>
+      </div>
+      <div class="flex flex-col items-end gap-0.5 flex-shrink-0 text-right">
+        <div class="text-white/40 text-xs">
+          <i class="fa-regular fa-calendar mr-1"></i>${u.created_at}
+        </div>
+        <div class="flex gap-2 text-xs">
+          <span class="text-white/50">${u.group_preds}+${u.ko_preds} pron.</span>
+          ${u.leagues.length?`<span style="color:rgba(200,164,74,0.7)"><i class="fa-solid fa-shield-halved mr-0.5"></i>${u.leagues.length}</span>`:''}
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+async function loadAdminUsers() {
+  try {
+    const data = await api('/api/admin/users');
+    renderAdminUsers(data);
+  } catch(e) {
+    const box = document.getElementById('admin-users-list');
+    if (box) box.innerHTML = '<div class="text-red-300 text-sm text-center py-4">Errore nel caricamento utenti.</div>';
+  }
+}
+
 function bind_admin() {
   bind_topbar_events();
+  loadAdminUsers();
+  document.getElementById('admin-users-refresh')?.addEventListener('click', loadAdminUsers);
 
   // ── Risultati speciali (capocannoniere + finale) ──
   (async () => {

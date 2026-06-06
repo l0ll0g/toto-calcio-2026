@@ -886,6 +886,32 @@ def leaderboard():
     board.sort(key=lambda x:-x['points'])
     return jsonify(board[:20])
 
+# ── Admin: elenco completo degli utenti registrati ────────────────────
+@app.route('/api/admin/users')
+@login_required
+@admin_required
+def admin_users():
+    users = []
+    for email in USERS:
+        p = PROFILES.get(email, {})
+        pts, correct, exact = _calc_points(email)
+        leagues = [LEAGUES[lid]['name'] for lid in USER_LEAGUES.get(email, []) if lid in LEAGUES]
+        users.append({
+            'email': email,
+            'nickname': p.get('nickname', email.split('@')[0]),
+            'avatar': p.get('avatar', '⚽'),
+            'created_at': p.get('created_at', '—'),
+            'points': pts, 'correct': correct, 'exact': exact,
+            'group_preds': len(PREDICTIONS.get(email, {})),
+            'ko_preds': len(KO_PRED.get(email, {})),
+            'submitted_groups': len(SUBMITTED.get(email, [])),
+            'ko_submitted': bool(KO_SUBMITTED.get(email, False)),
+            'leagues': leagues,
+            'is_admin': email == ADMIN_EMAIL,
+        })
+    users.sort(key=lambda u: u['nickname'].lower())
+    return jsonify({'count': len(users), 'users': users})
+
 # ── User profile ───────────────────────────────────────────────────────
 @app.route('/api/profile/<nickname>')
 def get_profile(nickname):

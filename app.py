@@ -505,6 +505,10 @@ def create_league():
     email = session['email']
     if not name or not pw:
         return jsonify({'error':'Nome e password obbligatori'}), 400
+    # Il nome della lega deve essere univoco (confronto case-insensitive)
+    for lg in LEAGUES.values():
+        if lg.get('name','').strip().lower() == name.lower():
+            return jsonify({'error':'Esiste già una lega con questo nome. Scegline un altro.'}), 409
     lid = secrets.token_urlsafe(8)
     LEAGUES[lid] = {
         'id':lid, 'name':name, 'password':league_pw_hash(pw),

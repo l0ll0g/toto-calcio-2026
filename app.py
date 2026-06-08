@@ -49,7 +49,11 @@ API_FOOTBALL_KEY = os.environ.get('API_FOOTBALL_KEY', '')
 # variabile d'ambiente FOOTBALL_DATA_KEY su Render.
 FOOTBALL_DATA_KEY  = os.environ.get('FOOTBALL_DATA_KEY', '')
 FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4'
-WC_COMPETITION_CODE = 'WC'   # codice FIFA World Cup su football-data.org
+# Competizione da interrogare. Default 'WC' (Mondiale). Per TESTARE prima del
+# Mondiale puoi impostare la variabile LIVE_COMPETITION='BSA' (campionato
+# brasiliano, in corso ora e incluso nel piano gratuito). A test finito,
+# rimettila a 'WC' (o rimuovi la variabile) per il Mondiale.
+WC_COMPETITION_CODE = os.environ.get('LIVE_COMPETITION', 'WC').strip() or 'WC'
 LIVE_POLL_SECONDS  = 60      # ogni quanto l'app interroga l'API (lato server cache)
 # Map: nome squadra nella nostra app -> nome su football-data.org (inglese)
 LIVE_TEAM_ALIASES = {
@@ -811,6 +815,37 @@ def poll_live(force=False):
     except Exception as e:
         LIVE_STATE['error'] = str(e)
     return LIVE_STATE
+
+@app.route('/api/live_raw')
+@login_required
+@admin_required
+def api_live_raw():
+    """[Diagnostica admin] mostra le partite GREZZE ricevute dalla fonte live,
+    senza filtrare per le nostre squadre. Utile per testare il collegamento con
+    una competizione qualsiasi (es. LIVE_COMPETITION=BSA) prima del Mondiale."""
+    if not LIVE_ENABLED:
+        return jsonify({'error':'Chiave FOOTBALL_DATA_KEY non impostata', 'competition': WC_COMPETITION_CODE})
+    try:
+        headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
+        url = f"{FOOTBALL_DATA_BASE}/competitions/{WC_COMPETITION_CODE}/matches"
+        req = _urlreq.Request(url, headers=headers)
+        with _urlreq.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        out = []
+        for m in data.get('matches', [])[:30]:
+            sc = (m.get('score') or {}).get('fullTime') or {}
+            out.append({
+                'home': (m.get('homeTeam') or {}).get('name'),
+                'away': (m.get('awayTeam') or {}).get('name'),
+                'status': m.get('status'),
+                'score': f"{sc.get('home')}-{sc.get('away')}" if sc.get('home') is not None else '',
+                'utcDate': m.get('utcDate'),
+            })
+        return jsonify({'competition': WC_COMPETITION_CODE,
+                        'count': data.get('count') or len(data.get('matches', [])),
+                        'matches': out})
+    except Exception as e:
+        return jsonify({'competition': WC_COMPETITION_CODE, 'error': str(e)})
 
 @app.route('/api/live')
 def api_live():

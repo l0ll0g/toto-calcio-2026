@@ -43,17 +43,15 @@ WC_DEADLINE  = datetime(2026, 6, 11, 20, 59, 59, tzinfo=timezone.utc)
 WC_GROUPS    = ['A','B','C','D','E','F','G','H','I','J','K','L']
 API_FOOTBALL_KEY = os.environ.get('API_FOOTBALL_KEY', '')
 
-# ── Live results: API-Football (api-football.com) ──────────────────────────
-# Chiave gratuita: registrati su https://www.api-football.com (100 richieste/giorno).
-# Impostala come variabile d'ambiente API_FOOTBALL_KEY su Render.
-API_FOOTBALL_KEY  = os.environ.get('API_FOOTBALL_KEY', '')   # <-- chiave api-football.com
-API_FOOTBALL_BASE = 'https://v3.football.api-sports.io'
-WC_LEAGUE_ID      = 1        # ID lega FIFA World Cup su API-Football
-WC_SEASON         = 2026
-# (compat: se qualcuno avesse ancora la vecchia variabile, non rompe nulla)
+# ── Live results: football-data.org ────────────────────────────────────────
+# Chiave gratuita su https://www.football-data.org/client/register
+# Il piano gratuito copre la FIFA World Cup (codice WC). Impostala come
+# variabile d'ambiente FOOTBALL_DATA_KEY su Render.
 FOOTBALL_DATA_KEY  = os.environ.get('FOOTBALL_DATA_KEY', '')
+FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4'
+WC_COMPETITION_CODE = 'WC'   # codice FIFA World Cup su football-data.org
 LIVE_POLL_SECONDS  = 60      # ogni quanto l'app interroga l'API (lato server cache)
-# Map: nome squadra nella nostra app -> nome su API-Football (inglese)
+# Map: nome squadra nella nostra app -> nome su football-data.org (inglese)
 LIVE_TEAM_ALIASES = {
     'Corea del Sud':'South Korea','Repubblica Ceca':'Czech Republic','Sudafrica':'South Africa',
     'Messico':'Mexico','Germania':'Germany','Spagna':'Spain','Francia':'France','Inghilterra':'England',
@@ -63,13 +61,13 @@ LIVE_TEAM_ALIASES = {
     'Algeria':'Algeria','Austria':'Austria','Portogallo':'Portugal','Colombia':'Colombia','RD Congo':'DR Congo',
     'Ghana':'Ghana','Panama':'Panama','Uruguay':'Uruguay','Iran':'Iran','Iraq':'Iraq','Tunisia':'Tunisia',
     'Svezia':'Sweden','Ecuador':'Ecuador',"Costa d'Avorio":'Ivory Coast','Curacao':'Curaçao','Haiti':'Haiti',
-    'Scozia':'Scotland','Canada':'Canada','USA':'USA','Paraguay':'Paraguay','Australia':'Australia',
-    'Turchia':'Turkey','Qatar':'Qatar','Bosnia':'Bosnia and Herzegovina','Argentina':'Argentina',
+    'Scozia':'Scotland','Canada':'Canada','USA':'United States','Paraguay':'Paraguay','Australia':'Australia',
+    'Turchia':'Türkiye','Qatar':'Qatar','Bosnia':'Bosnia and Herzegovina','Argentina':'Argentina',
     'Ungheria':'Hungary','Finlandia':'Finland','Cile':'Chile','Slovenia':'Slovenia','Ucraina':'Ukraine',
     'Italia':'Italy','Grecia':'Greece','Irlanda del Nord':'Northern Ireland','Kazakistan':'Kazakhstan',
     'Costa Rica':'Costa Rica','Nigeria':'Nigeria',
 }
-LIVE_ENABLED = bool(API_FOOTBALL_KEY)
+LIVE_ENABLED = bool(FOOTBALL_DATA_KEY)
 
 # Match labels for Excel (id -> home/away)
 WC_MATCH_SCHEDULE = {
@@ -711,39 +709,34 @@ FRIENDLY_SCHEDULE = [
 ]
 
 def _fetch_live_real():
-    """Interroga API-Football per le partite del Mondiale (e amichevoli se note).
-    Doc: https://www.api-football.com/documentation-v3
-    Risposta: data['response'] = [ {fixture:{status:{short}}, teams:{home,away}, goals:{home,away}}, ... ]
+    """Interroga football-data.org per le partite del Mondiale (LIVE + FINISHED).
+    Doc: https://www.football-data.org/documentation/quickstart
     """
-    headers = {'x-apisports-key': API_FOOTBALL_KEY}
-    url = f"{API_FOOTBALL_BASE}/fixtures?league={WC_LEAGUE_ID}&season={WC_SEASON}"
+    headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
+    url = f"{FOOTBALL_DATA_BASE}/competitions/{WC_COMPETITION_CODE}/matches"
     req = _urlreq.Request(url, headers=headers)
     with _urlreq.urlopen(req, timeout=12) as resp:
         data = json.loads(resp.read().decode('utf-8'))
     lut = _build_alias_lookup()
     found = {}
-    # Stati API-Football -> nostri stati
-    LIVE_CODES = {'1H','2H','HT','ET','BT','P','LIVE','INT'}     # in corso
-    DONE_CODES = {'FT','AET','PEN'}                              # finita
-    for item in data.get('response', []):
-        teams = item.get('teams', {})
-        h = (teams.get('home') or {}).get('name') or ''
-        a = (teams.get('away') or {}).get('name') or ''
+    for m in data.get('matches', []):
+        h = (m.get('homeTeam') or {}).get('name') or ''
+        a = (m.get('awayTeam') or {}).get('name') or ''
         key = (_norm(h), _norm(a))
         match_ref = lut.get(key)
         if not match_ref:
             continue
-        goals = item.get('goals', {})
-        sh, sa = goals.get('home'), goals.get('away')
-        short = ((item.get('fixture') or {}).get('status') or {}).get('short', 'NS')
-        if   short in DONE_CODES: status = 'FINISHED'
-        elif short in LIVE_CODES: status = 'IN_PLAY'
-        else:                     status = 'SCHEDULED'
+        score = (m.get('score') or {}).get('fullTime') or {}
+        sh, sa = score.get('home'), score.get('away')
+        # Stati football-data.org: SCHEDULED, TIMED, IN_PLAY, PAUSED, FINISHED, ...
+        raw = m.get('status', 'SCHEDULED')
+        if   raw in ('IN_PLAY','PAUSED'): status = 'IN_PLAY'
+        elif raw == 'FINISHED':           status = 'FINISHED'
+        else:                             status = 'SCHEDULED'
         score_str = f"{sh}-{sa}" if sh is not None and sa is not None else ''
-        minute = ((item.get('fixture') or {}).get('status') or {}).get('elapsed')
         found[match_ref['matchId']] = {
             'home': match_ref['home'], 'away': match_ref['away'],
-            'score': score_str, 'status': status, 'minute': minute,
+            'score': score_str, 'status': status, 'minute': m.get('minute'),
         }
     return found
 

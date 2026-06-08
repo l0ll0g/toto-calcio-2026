@@ -1,0 +1,1225 @@
+from flask import Flask, render_template, request, jsonify, session, send_file
+import os, hashlib, json, io, secrets, string, re
+from functools import wraps
+from datetime import datetime, timezone, timedelta
+import openpyxl
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
+import logging
+
+app = Flask(__name__)
+# Dietro un reverse proxy/hosting (Render, Railway, nginx): fidati degli header
+# X-Forwarded-* così Flask sa che la connessione esterna è HTTPS e l'IP reale.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+# SECRET_KEY: in produzione DEVE arrivare da variabile d'ambiente.
+# In sviluppo, se assente, ne generiamo una casuale (le sessioni non
+# sopravvivono al riavvio, ma è sicura).
+_secret = os.environ.get('SECRET_KEY')
+if not _secret:
+    _secret = secrets.token_hex(32)
+    print('[WARN] SECRET_KEY non impostata: ne uso una casuale temporanea. '
+          'In produzione imposta la variabile SECRET_KEY.')
+app.secret_key = _secret
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s [%(levelname)s] %(message)s')
+
+# Sicurezza cookie di sessione
+_is_prod = os.environ.get('FLASK_ENV') == 'production' or os.environ.get('PRODUCTION') == '1'
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=_is_prod,     # True solo dietro HTTPS in produzione
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+    MAX_CONTENT_LENGTH=1 * 1024 * 1024, # max 1 MB per richiesta
+)
+EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+# ── Config ─────────────────────────────────────────────────────────────
+ADMIN_EMAIL  = 'lorenzogucci05@gmail.com'
+WC_DEADLINE  = datetime(2026, 6, 11, 20, 59, 59, tzinfo=timezone.utc)
+WC_GROUPS    = ['A','B','C','D','E','F','G','H','I','J','K','L']
+API_FOOTBALL_KEY = os.environ.get('API_FOOTBALL_KEY', '')
+
+# ── Live results: football-data.org ────────────────────────────────────────
+# Chiave gratuita su https://www.football-data.org/client/register
+# Incollala qui sotto (o impostala come variabile d'ambiente FOOTBALL_DATA_KEY).
+FOOTBALL_DATA_KEY  = os.environ.get('FOOTBALL_DATA_KEY', '')   # <-- INCOLLA QUI LA TUA CHIAVE
+FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4'
+WC_COMPETITION_CODE = 'WC'   # codice FIFA World Cup su football-data.org
+LIVE_POLL_SECONDS  = 60      # ogni quanto l'app interroga l'API (lato server cache)
+# Map: nome squadra nella nostra app -> nome su football-data.org
+LIVE_TEAM_ALIASES = {
+    'Corea del Sud':'South Korea','Repubblica Ceca':'Czech Republic','Sudafrica':'South Africa',
+    'Messico':'Mexico','Germania':'Germany','Spagna':'Spain','Francia':'France','Inghilterra':'England',
+    'Brasile':'Brazil','Croazia':'Croatia','Belgio':'Belgium','Svizzera':'Switzerland','Olanda':'Netherlands',
+    'Giappone':'Japan','Marocco':'Morocco','Senegal':'Senegal','Norvegia':'Norway','Arabia Saudita':'Saudi Arabia',
+    'Capo Verde':'Cape Verde','Uzbekistan':'Uzbekistan','Giordania':'Jordan','Egitto':'Egypt','Nuova Zelanda':'New Zealand',
+    'Algeria':'Algeria','Austria':'Austria','Portogallo':'Portugal','Colombia':'Colombia','RD Congo':'DR Congo',
+    'Ghana':'Ghana','Panama':'Panama','Uruguay':'Uruguay','Iran':'Iran','Iraq':'Iraq','Tunisia':'Tunisia',
+    'Svezia':'Sweden','Ecuador':'Ecuador',"Costa d'Avorio":'Ivory Coast','Curacao':'Curaçao','Haiti':'Haiti',
+    'Scozia':'Scotland','Canada':'Canada','USA':'United States','Paraguay':'Paraguay','Australia':'Australia',
+    'Turchia':'Türkiye','Qatar':'Qatar','Bosnia':'Bosnia and Herzegovina','Argentina':'Argentina',
+    'Ungheria':'Hungary','Finlandia':'Finland','Cile':'Chile','Slovenia':'Slovenia','Ucraina':'Ukraine',
+    'Italia':'Italy','Grecia':'Greece','Irlanda del Nord':'Northern Ireland','Kazakistan':'Kazakhstan',
+    'Costa Rica':'Costa Rica','Nigeria':'Nigeria',
+}
+LIVE_ENABLED = bool(FOOTBALL_DATA_KEY)
+
+# Match labels for Excel (id -> home/away)
+WC_MATCH_SCHEDULE = {
+  'A':[{'id':'wc-A-m1','home':'Messico','away':'Sudafrica'},{'id':'wc-A-m2','home':'Corea del Sud','away':'Repubblica Ceca'},{'id':'wc-A-m3','home':'Repubblica Ceca','away':'Sudafrica'},{'id':'wc-A-m4','home':'Messico','away':'Corea del Sud'},{'id':'wc-A-m5','home':'Sudafrica','away':'Corea del Sud'},{'id':'wc-A-m6','home':'Repubblica Ceca','away':'Messico'}],
+  'B':[{'id':'wc-B-m1','home':'Canada','away':'Bosnia'},{'id':'wc-B-m2','home':'Svizzera','away':'Qatar'},{'id':'wc-B-m3','home':'Svizzera','away':'Bosnia'},{'id':'wc-B-m4','home':'Canada','away':'Qatar'},{'id':'wc-B-m5','home':'Svizzera','away':'Canada'},{'id':'wc-B-m6','home':'Bosnia','away':'Qatar'}],
+  'C':[{'id':'wc-C-m1','home':'Brasile','away':'Marocco'},{'id':'wc-C-m2','home':'Haiti','away':'Scozia'},{'id':'wc-C-m3','home':'Scozia','away':'Marocco'},{'id':'wc-C-m4','home':'Brasile','away':'Haiti'},{'id':'wc-C-m5','home':'Marocco','away':'Haiti'},{'id':'wc-C-m6','home':'Scozia','away':'Brasile'}],
+  'D':[{'id':'wc-D-m1','home':'USA','away':'Paraguay'},{'id':'wc-D-m2','home':'Australia','away':'Turchia'},{'id':'wc-D-m3','home':'Turchia','away':'Paraguay'},{'id':'wc-D-m4','home':'USA','away':'Australia'},{'id':'wc-D-m5','home':'Turchia','away':'USA'},{'id':'wc-D-m6','home':'Paraguay','away':'Australia'}],
+  'E':[{'id':'wc-E-m1','home':'Germania','away':'Curacao'},{'id':'wc-E-m2','home':"Costa d'Avorio",'away':'Ecuador'},{'id':'wc-E-m3','home':'Germania','away':"Costa d'Avorio"},{'id':'wc-E-m4','home':'Ecuador','away':'Curacao'},{'id':'wc-E-m5','home':'Curacao','away':"Costa d'Avorio"},{'id':'wc-E-m6','home':'Ecuador','away':'Germania'}],
+  'F':[{'id':'wc-F-m1','home':'Olanda','away':'Giappone'},{'id':'wc-F-m2','home':'Svezia','away':'Tunisia'},{'id':'wc-F-m3','home':'Tunisia','away':'Giappone'},{'id':'wc-F-m4','home':'Olanda','away':'Svezia'},{'id':'wc-F-m5','home':'Tunisia','away':'Olanda'},{'id':'wc-F-m6','home':'Giappone','away':'Svezia'}],
+  'G':[{'id':'wc-G-m1','home':'Belgio','away':'Egitto'},{'id':'wc-G-m2','home':'Iran','away':'Nuova Zelanda'},{'id':'wc-G-m3','home':'Belgio','away':'Iran'},{'id':'wc-G-m4','home':'Nuova Zelanda','away':'Egitto'},{'id':'wc-G-m5','home':'Nuova Zelanda','away':'Belgio'},{'id':'wc-G-m6','home':'Egitto','away':'Iran'}],
+  'H':[{'id':'wc-H-m1','home':'Spagna','away':'Capo Verde'},{'id':'wc-H-m2','home':'Arabia Saudita','away':'Uruguay'},{'id':'wc-H-m3','home':'Spagna','away':'Arabia Saudita'},{'id':'wc-H-m4','home':'Uruguay','away':'Capo Verde'},{'id':'wc-H-m5','home':'Capo Verde','away':'Arabia Saudita'},{'id':'wc-H-m6','home':'Uruguay','away':'Spagna'}],
+  'I':[{'id':'wc-I-m1','home':'Francia','away':'Senegal'},{'id':'wc-I-m2','home':'Iraq','away':'Norvegia'},{'id':'wc-I-m3','home':'Francia','away':'Iraq'},{'id':'wc-I-m4','home':'Norvegia','away':'Senegal'},{'id':'wc-I-m5','home':'Norvegia','away':'Francia'},{'id':'wc-I-m6','home':'Senegal','away':'Iraq'}],
+  'J':[{'id':'wc-J-m1','home':'Austria','away':'Giordania'},{'id':'wc-J-m2','home':'Argentina','away':'Algeria'},{'id':'wc-J-m3','home':'Argentina','away':'Austria'},{'id':'wc-J-m4','home':'Giordania','away':'Algeria'},{'id':'wc-J-m5','home':'Algeria','away':'Austria'},{'id':'wc-J-m6','home':'Giordania','away':'Argentina'}],
+  'K':[{'id':'wc-K-m1','home':'Portogallo','away':'RD Congo'},{'id':'wc-K-m2','home':'Uzbekistan','away':'Colombia'},{'id':'wc-K-m3','home':'Portogallo','away':'Uzbekistan'},{'id':'wc-K-m4','home':'Colombia','away':'RD Congo'},{'id':'wc-K-m5','home':'Colombia','away':'Portogallo'},{'id':'wc-K-m6','home':'RD Congo','away':'Uzbekistan'}],
+  'L':[{'id':'wc-L-m1','home':'Inghilterra','away':'Croazia'},{'id':'wc-L-m2','home':'Ghana','away':'Panama'},{'id':'wc-L-m3','home':'Inghilterra','away':'Ghana'},{'id':'wc-L-m4','home':'Panama','away':'Croazia'},{'id':'wc-L-m5','home':'Panama','away':'Inghilterra'},{'id':'wc-L-m6','home':'Croazia','away':'Ghana'}],
+}
+
+# ── Persistent stores (SQLite-backed, survive restarts) ────────────────────
+from storage import PersistentDict
+USERS        = PersistentDict('users')        # email -> {pw}
+PROFILES     = PersistentDict('profiles')      # email -> {nickname, avatar, created_at}
+PREDICTIONS  = PersistentDict('predictions')   # email -> {matchId: {pick, score}}
+KO_PRED      = PersistentDict('ko_pred')        # email -> {koMatchId: {score, adv}}
+KO_SUBMITTED = PersistentDict('ko_submitted')   # email -> bool
+SUBMITTED    = PersistentDict('submitted')      # email -> [group_letters]
+RESULTS      = PersistentDict('results')        # matchId -> {pick, score}
+RESET_TOKENS = PersistentDict('reset_tokens')   # token -> email
+# Leagues
+LEAGUES      = PersistentDict('leagues')        # league_id -> {name, password, admin_email, members:[], created_at}
+USER_LEAGUES = PersistentDict('user_leagues')   # email -> [league_id, ...]
+# Special predictions
+TOPSCORER_PRED = PersistentDict('topscorer_pred')  # email -> player_name
+FINAL_PRED     = PersistentDict('final_pred')      # email -> {home, away, winner, score}
+# Real outcomes for special bets (admin sets these)
+SPECIAL_RESULTS = PersistentDict('special_results')  # 'topscorer'->name, 'final'->{home,away,winner,score}
+
+
+# Knockout match metadata for Excel export (id -> round label + matchup placeholder)
+WC_KO_META = [
+  ('wc-r64-73','Sedicesimi','2ª A - 2ª B'),('wc-r64-74','Sedicesimi','1ª E - 3ª'),
+  ('wc-r64-75','Sedicesimi','1ª F - 2ª C'),('wc-r64-76','Sedicesimi','1ª C - 2ª F'),
+  ('wc-r64-77','Sedicesimi','1ª I - 3ª'),('wc-r64-78','Sedicesimi','2ª E - 2ª I'),
+  ('wc-r64-79','Sedicesimi','1ª A - 3ª'),('wc-r64-80','Sedicesimi','1ª L - 3ª'),
+  ('wc-r64-81','Sedicesimi','1ª D - 3ª'),('wc-r64-82','Sedicesimi','1ª G - 3ª'),
+  ('wc-r64-83','Sedicesimi','2ª K - 2ª L'),('wc-r64-84','Sedicesimi','1ª H - 2ª J'),
+  ('wc-r64-85','Sedicesimi','1ª B - 3ª'),('wc-r64-86','Sedicesimi','1ª J - 2ª H'),
+  ('wc-r64-87','Sedicesimi','1ª K - 3ª'),('wc-r64-88','Sedicesimi','2ª D - 2ª G'),
+  ('wc-r32-89','Ottavi','V74 - V77'),('wc-r32-90','Ottavi','V73 - V75'),
+  ('wc-r32-91','Ottavi','V76 - V78'),('wc-r32-92','Ottavi','V79 - V80'),
+  ('wc-r32-93','Ottavi','V83 - V84'),('wc-r32-94','Ottavi','V81 - V82'),
+  ('wc-r32-95','Ottavi','V86 - V88'),('wc-r32-96','Ottavi','V85 - V87'),
+  ('wc-qf-97','Quarti','V89 - V90'),('wc-qf-98','Quarti','V93 - V94'),
+  ('wc-qf-99','Quarti','V91 - V92'),('wc-qf-100','Quarti','V95 - V96'),
+  ('wc-sf-101','Semifinale','V97 - V98'),('wc-sf-102','Semifinale','V99 - V100'),
+  ('wc-bronze','Finale 3° posto','P SF1 - P SF2'),('wc-final','FINALE','V SF1 - V SF2'),
+]
+
+def hash_pw(pw):   return generate_password_hash(pw)
+def league_pw_hash(pw): return hashlib.sha256(('lg:'+pw).encode()).hexdigest()
+def verify_pw(stored, pw):
+    """Verifica password: supporta nuovi hash werkzeug e vecchi SHA-256."""
+    if not stored: return False
+    if len(stored) == 64 and all(c in '0123456789abcdef' for c in stored.lower()):
+        return hashlib.sha256(pw.encode()).hexdigest() == stored
+    try:    return check_password_hash(stored, pw)
+    except Exception: return False
+def is_admin():    return session.get('email') == ADMIN_EMAIL
+def deadline_passed(): return datetime.now(timezone.utc) > WC_DEADLINE
+
+def _kickoff_map():
+    """matchId -> datetime UTC del fischio d'inizio (per il blocco per-partita)."""
+    m = {}
+    for fr in FRIENDLY_SCHEDULE:
+        if fr.get('kickoff'):
+            try: m[fr['id']] = datetime.fromisoformat(fr['kickoff'].replace('Z','+00:00'))
+            except Exception: pass
+    return m
+
+def match_locked(match_id):
+    """Un pronostico è bloccato se:
+       - la partita è iniziata (ora attuale >= kickoff), OPPURE
+       - risulta già IN_PLAY/PAUSED/FINISHED dal feed live, OPPURE
+       - per le partite del Mondiale, è passata la deadline globale."""
+    now = datetime.now(timezone.utc)
+    # Stato live (se l'abbiamo già rilevato)
+    info = LIVE_STATE.get('matches', {}).get(match_id) if 'LIVE_STATE' in globals() else None
+    if info and info.get('status') in ('IN_PLAY','PAUSED','FINISHED'):
+        return True
+    # Kickoff specifico (amichevoli)
+    ko = _kickoff_map().get(match_id)
+    if ko and now >= ko:
+        return True
+    # Partite del Mondiale: deadline globale
+    if match_id.startswith('wc-') and deadline_passed():
+        return True
+    return False
+
+def login_required(f):
+    @wraps(f)
+    def d(*a, **kw):
+        if 'email' not in session: return jsonify({'error':'Non autenticato'}), 401
+        return f(*a, **kw)
+    return d
+
+def admin_required(f):
+    @wraps(f)
+    def d(*a, **kw):
+        if not is_admin(): return jsonify({'error':'Accesso negato'}), 403
+        return f(*a, **kw)
+    return d
+
+# ── Rate limiting (in-memory, anti brute-force) ────────────────────────
+_RATE = {}  # key (ip+route) -> [timestamps]
+def rate_limit(max_calls, window_sec):
+    def deco(f):
+        @wraps(f)
+        def d(*a, **kw):
+            ip = request.headers.get('X-Forwarded-For', request.remote_addr or '?').split(',')[0].strip()
+            key = f"{ip}:{f.__name__}"
+            now = datetime.now(timezone.utc).timestamp()
+            hits = [t for t in _RATE.get(key, []) if now - t < window_sec]
+            if len(hits) >= max_calls:
+                return jsonify({'error':'Troppi tentativi. Riprova tra qualche minuto.'}), 429
+            hits.append(now)
+            _RATE[key] = hits
+            return f(*a, **kw)
+        return d
+    return deco
+
+# ── Auth ───────────────────────────────────────────────────────────────
+@app.route('/api/register', methods=['POST'])
+@rate_limit(10, 600)
+def register():
+    d = request.json
+    email    = d.get('email','').strip().lower()
+    pw       = d.get('password','')
+    nickname = d.get('nickname','').strip()
+    avatar   = d.get('avatar','⚽')
+    if not EMAIL_RE.match(email):
+        return jsonify({'error':'Inserisci un indirizzo email valido'}), 400
+    if len(pw) < 6:
+        return jsonify({'error':'La password deve avere almeno 6 caratteri'}), 400
+    if len(nickname) < 2 or len(nickname) > 24:
+        return jsonify({'error':'Il nickname deve avere tra 2 e 24 caratteri'}), 400
+    if email in USERS:
+        return jsonify({'error':'Email già registrata'}), 409
+    for e,p in PROFILES.items():
+        if p.get('nickname','').lower() == nickname.lower():
+            return jsonify({'error':'Nickname già in uso'}), 409
+    now = datetime.now().strftime('%d/%m/%Y')
+    USERS[email]   = {'pw': hash_pw(pw)}
+    PROFILES[email]= {'nickname':nickname, 'avatar':avatar, 'created_at':now}
+    PREDICTIONS[email] = {}
+    SUBMITTED[email]   = []
+    USER_LEAGUES[email]= []
+    session['email']   = email
+    return jsonify({'ok':True,'email':email,'nickname':nickname,'avatar':avatar,
+                    'is_admin':email==ADMIN_EMAIL,'created_at':now})
+
+@app.route('/api/login', methods=['POST'])
+@rate_limit(15, 300)
+def login():
+    d     = request.json
+    email = d.get('email','').strip().lower()
+    pw    = d.get('password','')
+    if not email or not pw:
+        return jsonify({'error':'Inserisci email e password.'}), 400
+    if email not in USERS:
+        return jsonify({'error':'Account non trovato. Registrati prima di accedere.'}), 404
+    if not verify_pw(USERS[email].get('pw',''), pw):
+        return jsonify({'error':'Password errata. Riprova.'}), 401
+    # Migra al volo i vecchi hash SHA-256 al nuovo formato sicuro
+    if len(USERS[email].get('pw','')) == 64:
+        USERS[email]['pw'] = hash_pw(pw); USERS.save(email)
+    session.permanent = True
+    session['email'] = email
+    p = PROFILES.get(email,{})
+    return jsonify({'ok':True,'email':email,
+                    'nickname':p.get('nickname',email.split('@')[0]),
+                    'avatar':p.get('avatar','⚽'),
+                    'created_at':p.get('created_at','—'),
+                    'is_admin':email==ADMIN_EMAIL})
+
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    session.pop('email',None)
+    return jsonify({'ok':True})
+
+@app.route('/api/me')
+def me():
+    if 'email' not in session: return jsonify({'logged':False})
+    email = session['email']
+    p = PROFILES.get(email,{})
+    return jsonify({'logged':True,'email':email,
+                    'nickname':p.get('nickname',email.split('@')[0]),
+                    'avatar':p.get('avatar','⚽'),
+                    'created_at':p.get('created_at','—'),
+                    'is_admin':email==ADMIN_EMAIL})
+
+# ── Password reset ─────────────────────────────────────────────────────
+@app.route('/api/request_reset', methods=['POST'])
+@rate_limit(5, 600)
+def request_reset():
+    email = request.json.get('email','').strip().lower()
+    if email not in USERS:
+        return jsonify({'error':'Email non trovata'}), 404
+    token = ''.join(secrets.choice(string.ascii_uppercase+string.digits) for _ in range(8))
+    RESET_TOKENS[token] = email
+    # Admin sees all tokens at /api/admin/reset_tokens
+    return jsonify({'ok':True,'message':'Richiesta inviata. Contatta l\'amministratore con la tua email per ricevere il token.'})
+
+@app.route('/api/reset_password', methods=['POST'])
+def reset_password():
+    d     = request.json
+    token = d.get('token','').strip().upper()
+    pw    = d.get('password','')
+    if token not in RESET_TOKENS:
+        return jsonify({'error':'Token non valido o scaduto'}), 400
+    if len(pw) < 6:
+        return jsonify({'error':'Password min 6 caratteri'}), 400
+    email = RESET_TOKENS.pop(token)
+    if email not in USERS:
+        return jsonify({'error':'Account non trovato'}), 404
+    USERS[email] = {'pw': hash_pw(pw)}
+    return jsonify({'ok':True})
+
+@app.route('/api/admin/reset_tokens')
+@login_required
+@admin_required
+def admin_reset_tokens():
+    return jsonify(RESET_TOKENS)
+
+# ── Predictions ────────────────────────────────────────────────────────
+@app.route('/api/predictions', methods=['GET'])
+@login_required
+def get_predictions():
+    email = session['email']
+    return jsonify({'predictions':PREDICTIONS.get(email,{}),
+                    'submitted':SUBMITTED.get(email,[]),
+                    'topscorer':TOPSCORER_PRED.get(email,''),
+                    'final_pred':FINAL_PRED.get(email,{}),
+                    'ko_pred':KO_PRED.get(email,{}),
+                    'ko_submitted':KO_SUBMITTED.get(email, False)})
+
+@app.route('/api/ko_prediction', methods=['POST'])
+@login_required
+def set_ko_prediction():
+    d        = request.json or {}
+    match_id = (d.get('matchId') or '').strip()
+    score    = (d.get('score') or '').strip()
+    adv      = (d.get('adv') or '').strip()   # team that advances on a draw (supplementari/rigori)
+    email    = session['email']
+    if not match_id:
+        return jsonify({'error':'matchId mancante'}), 400
+    if deadline_passed():
+        return jsonify({'error':'Termine scaduto'}), 403
+    if KO_SUBMITTED.get(email, False):
+        return jsonify({'error':'Fase ad eliminazione già inviata e bloccata'}), 403
+    if score:
+        if '-' not in score:
+            return jsonify({'error':'Formato risultato non valido'}), 400
+        try:
+            h, a = map(int, score.split('-', 1))
+        except ValueError:
+            return jsonify({'error':'Risultato non valido'}), 400
+    if email not in KO_PRED:
+        KO_PRED[email] = {}
+    if score:
+        entry = {'score': score}
+        if adv:
+            entry['adv'] = adv   # used only when the score is a draw
+        KO_PRED[email][match_id] = entry
+        KO_PRED.save(email)
+    elif match_id in KO_PRED[email]:
+        del KO_PRED[email][match_id]
+        KO_PRED.save(email)
+    return jsonify({'ok':True, 'ko_pred':KO_PRED[email]})
+
+@app.route('/api/submit_ko', methods=['POST'])
+@login_required
+def submit_ko():
+    email = session['email']
+    if deadline_passed():
+        return jsonify({'error':'Termine scaduto'}), 403
+    KO_SUBMITTED[email] = True
+    return jsonify({'ok':True, 'ko_submitted':True})
+
+
+@app.route('/api/predictions', methods=['POST'])
+@login_required
+def set_prediction():
+    d        = request.json
+    match_id = d.get('matchId','').strip()
+    pick     = d.get('pick','').strip()
+    score    = d.get('score','').strip()
+    email    = session['email']
+
+    if not match_id:
+        return jsonify({'error':'matchId mancante'}), 400
+
+    parts = match_id.split('-')
+    group = parts[1].upper() if len(parts) >= 2 else None
+
+    if group and group in SUBMITTED.get(email, []):
+        return jsonify({'error': 'Pronostico già inviato per questo girone'}), 403
+
+    # Blocco al fischio d'inizio: partita iniziata/in corso/finita = non più pronosticabile
+    if match_locked(match_id):
+        return jsonify({'error': 'La partita è già iniziata: pronostico bloccato'}), 403
+
+    if email not in PREDICTIONS:
+        PREDICTIONS[email] = {}
+
+    # Derive pick from score if not provided
+    if score and '-' in score and not pick:
+        try:
+            h, a = map(int, score.split('-', 1))
+            pick = '1' if h > a else '2' if a > h else 'X'
+        except ValueError:
+            pass
+
+    # Validate pick
+    if pick not in ('1', 'X', '2'):
+        return jsonify({'error': 'Pick non valido'}), 400
+
+    # Save prediction — always overwrite with latest values
+    PREDICTIONS[email][match_id] = {'pick': pick, 'score': score}
+    PREDICTIONS.save(email)
+
+    return jsonify({
+        'ok': True,
+        'predictions': PREDICTIONS[email],
+        'submitted': SUBMITTED.get(email, [])
+    })
+
+@app.route('/api/submit_group', methods=['POST'])
+@login_required
+def submit_group():
+    d     = request.json
+    group = d.get('group','').upper()
+    email = session['email']
+    if group not in WC_GROUPS:
+        return jsonify({'error':'Girone non valido'}), 400
+    if deadline_passed():
+        return jsonify({'error':'Termine scaduto!'}), 403
+    if group in SUBMITTED.get(email,[]):
+        return jsonify({'error':'Già inviato'}), 409
+    _sub = SUBMITTED.get(email, [])
+    if group not in _sub: _sub.append(group)
+    SUBMITTED[email] = _sub
+    return jsonify({'ok':True,'submitted':SUBMITTED[email]})
+
+# ── Top scorer prediction ──────────────────────────────────────────────
+@app.route('/api/topscorer', methods=['POST'])
+@login_required
+def set_topscorer():
+    player = request.json.get('player','').strip()
+    if not player: return jsonify({'error':'Giocatore non valido'}), 400
+    if deadline_passed(): return jsonify({'error':'Termine scaduto'}), 403
+    TOPSCORER_PRED[session['email']] = player
+    return jsonify({'ok':True,'player':player})
+
+# ── Final prediction ───────────────────────────────────────────────────
+@app.route('/api/final_pred', methods=['POST'])
+@login_required
+def set_final_pred():
+    d = request.json
+    home   = d.get('home','').strip()
+    away   = d.get('away','').strip()
+    winner = d.get('winner','').strip()
+    score  = d.get('score','').strip()
+    if not home or not away or not winner:
+        return jsonify({'error':'Dati non completi'}), 400
+    if home == away:
+        return jsonify({'error':'Le due finaliste devono essere diverse'}), 400
+    if deadline_passed(): return jsonify({'error':'Termine scaduto'}), 403
+    FINAL_PRED[session['email']] = {'home':home,'away':away,'winner':winner,'score':score}
+    return jsonify({'ok':True})
+
+# ── Results (admin) ────────────────────────────────────────────────────
+@app.route('/api/results', methods=['GET'])
+def get_results():
+    return jsonify(dict(RESULTS))
+
+@app.route('/api/results', methods=['POST'])
+@login_required
+@admin_required
+def set_result():
+    d = request.json
+    mid   = d.get('matchId')
+    pick  = d.get('pick')
+    score = d.get('score','')
+    if not mid or pick not in ('1','X','2'):
+        return jsonify({'error':'Dati non validi'}), 400
+    RESULTS[mid] = {'pick':pick,'score':score}
+    return jsonify({'ok':True})
+
+@app.route('/api/special_results', methods=['GET'])
+def get_special_results():
+    return jsonify({'topscorer': SPECIAL_RESULTS.get('topscorer',''),
+                    'final': SPECIAL_RESULTS.get('final',{})})
+
+@app.route('/api/special_results', methods=['POST'])
+@login_required
+@admin_required
+def set_special_results():
+    """Admin imposta l'esito reale di capocannoniere e/o finale."""
+    d = request.json or {}
+    if 'topscorer' in d:
+        SPECIAL_RESULTS['topscorer'] = (d.get('topscorer') or '').strip()
+    if 'final' in d:
+        f = d.get('final') or {}
+        home = (f.get('home') or '').strip()
+        away = (f.get('away') or '').strip()
+        score = (f.get('score') or '').strip()
+        winner = (f.get('winner') or '').strip()
+        if home and away:
+            if not winner and score and '-' in score:
+                try:
+                    h,a = map(int, score.split('-')); winner = home if h>=a else away
+                except Exception: pass
+            SPECIAL_RESULTS['final'] = {'home':home,'away':away,'winner':winner,'score':score}
+    return jsonify({'ok':True,
+                    'topscorer':SPECIAL_RESULTS.get('topscorer',''),
+                    'final':SPECIAL_RESULTS.get('final',{})})
+
+# ── Leagues ────────────────────────────────────────────────────────────
+@app.route('/api/leagues', methods=['POST'])
+@login_required
+def create_league():
+    d     = request.json
+    name  = d.get('name','').strip()
+    pw    = d.get('password','').strip()
+    email = session['email']
+    if not name or not pw:
+        return jsonify({'error':'Nome e password obbligatori'}), 400
+    lid = secrets.token_urlsafe(8)
+    LEAGUES[lid] = {
+        'id':lid, 'name':name, 'password':league_pw_hash(pw),
+        'admin_email':email, 'members':[email],
+        'created_at':datetime.now().strftime('%d/%m/%Y')
+    }
+    _ul = USER_LEAGUES.get(email, []);  _ul.append(lid);  USER_LEAGUES[email] = _ul
+    return jsonify({'ok':True,'league':_league_public(lid)})
+
+@app.route('/api/leagues/join', methods=['POST'])
+@login_required
+def join_league():
+    d    = request.json
+    name = d.get('name','').strip().lower()
+    pw   = d.get('password','').strip()
+    email= session['email']
+    target = None
+    for lid, lg in LEAGUES.items():
+        if lg['name'].lower() == name:
+            target = lid; break
+    if not target:
+        return jsonify({'error':'Lega non trovata'}), 404
+    if LEAGUES[target]['password'] != league_pw_hash(pw):
+        return jsonify({'error':'Password errata'}), 401
+    if email in LEAGUES[target]['members']:
+        return jsonify({'error':'Sei già membro di questa lega'}), 409
+    LEAGUES[target]['members'].append(email);  LEAGUES.save(target)
+    _ul = USER_LEAGUES.get(email, []);  _ul.append(target);  USER_LEAGUES[email] = _ul
+    return jsonify({'ok':True,'league':_league_public(target)})
+
+@app.route('/api/leagues/join_by_link/<lid>', methods=['POST'])
+@login_required
+def join_by_link(lid):
+    email = session['email']
+    if lid not in LEAGUES:
+        return jsonify({'error':'Lega non trovata'}), 404
+    if email in LEAGUES[lid]['members']:
+        return jsonify({'error':'Sei già membro'}), 409
+    LEAGUES[lid]['members'].append(email);  LEAGUES.save(lid)
+    _ul = USER_LEAGUES.get(email, []);  _ul.append(lid);  USER_LEAGUES[email] = _ul
+    return jsonify({'ok':True,'league':_league_public(lid)})
+
+@app.route('/api/leagues/mine')
+@login_required
+def my_leagues():
+    email = session['email']
+    ids = USER_LEAGUES.get(email,[])
+    return jsonify([_league_public(lid) for lid in ids if lid in LEAGUES])
+
+@app.route('/api/leagues/<lid>')
+def league_detail(lid):
+    if lid not in LEAGUES: return jsonify({'error':'Non trovata'}), 404
+    lg = _league_public(lid)
+    # Add leaderboard for this league
+    lb = _league_leaderboard(lid)
+    lg['leaderboard'] = lb
+    return jsonify(lg)
+
+def _league_public(lid):
+    lg = LEAGUES[lid]
+    return {
+        'id': lg['id'], 'name': lg['name'],
+        'admin_email': lg['admin_email'],
+        'member_count': len(lg['members']),
+        'created_at': lg['created_at'],
+        'invite_link': f'/join/{lg["id"]}',
+    }
+
+def _league_leaderboard(lid):
+    if lid not in LEAGUES: return []
+    members = LEAGUES[lid]['members']
+    board = []
+    for email in members:
+        p = PROFILES.get(email,{})
+        pts, correct, exact = _calc_points(email)
+        board.append({'email':email,
+                      'nickname':p.get('nickname',email.split('@')[0]),
+                      'avatar':p.get('avatar','⚽'),
+                      'points':pts,'correct':correct,'exact':exact,
+                      'submitted':len(SUBMITTED.get(email,[]))})
+    board.sort(key=lambda x:-x['points'])
+    return board
+
+def _calc_points(email):
+    """Punteggio totale dell'utente.
+    Gironi (PREDICTIONS) + Eliminazione (KO_PRED) confrontati con RESULTS:
+      esatto = 3pt, solo esito 1/X/2 = 1pt.
+    Bonus speciali (SPECIAL_RESULTS):
+      capocannoniere indovinato = +5pt
+      finalisti corretti = +3pt, finale col risultato esatto = +5pt
+    Ritorna (punti, esiti_corretti, risultati_esatti)."""
+    pts=0; correct=0; exact=0
+
+    # 1) Gironi
+    for mid, pred in PREDICTIONS.get(email, {}).items():
+        res = RESULTS.get(mid)
+        if not res: continue
+        if pred.get('score') and pred.get('score') == res.get('score'):
+            pts+=3; exact+=1; correct+=1
+        elif pred.get('pick') == res.get('pick'):
+            pts+=1; correct+=1
+
+    # 2) Eliminazione diretta
+    for mid, pred in KO_PRED.get(email, {}).items():
+        res = RESULTS.get(mid)
+        if not res or not pred.get('score'): continue
+        ph, pa = (pred['score'].split('-') + ['',''])[:2]
+        rscore = res.get('score','')
+        if pred['score'] == rscore:
+            pts+=3; exact+=1; correct+=1
+        else:
+            # esito (1/X/2) corretto?
+            def _out(s):
+                try:
+                    h,a = map(int, s.split('-')); return '1' if h>a else '2' if a>h else 'X'
+                except Exception: return None
+            if _out(pred['score']) and _out(pred['score']) == _out(rscore):
+                pts+=1; correct+=1
+
+    # 3) Capocannoniere (+5)
+    ts_real = SPECIAL_RESULTS.get('topscorer')
+    if ts_real and TOPSCORER_PRED.get(email) == ts_real:
+        pts += 5
+
+    # 4) Finale: finalisti +3, risultato esatto +5
+    fin_real = SPECIAL_RESULTS.get('final')  # {home,away,winner,score}
+    fp = FINAL_PRED.get(email)
+    if fin_real and fp:
+        real_teams = {fin_real.get('home'), fin_real.get('away')}
+        pred_teams = {fp.get('home'), fp.get('away')}
+        if real_teams == pred_teams and None not in real_teams:
+            pts += 3
+            if fp.get('score') and fp.get('score') == fin_real.get('score'):
+                pts += 5
+            elif fp.get('winner') and fp.get('winner') == fin_real.get('winner'):
+                pts += 2  # vincitore giusto ma risultato no
+
+    return pts, correct, exact
+
+
+# ════════════════════════════════════════════════════════════════════════════
+#  LIVE RESULTS ENGINE
+#  - Con chiave: interroga football-data.org e aggiorna RESULTS dei match veri.
+#  - Senza chiave: MODALITÀ SIMULAZIONE, fa progredire una partita demo nel tempo
+#    così puoi vedere il meccanismo live senza registrarti.
+# ════════════════════════════════════════════════════════════════════════════
+import time as _time
+try:
+    import urllib.request as _urlreq
+    import urllib.error as _urlerr
+except Exception:
+    _urlreq = None
+
+LIVE_STATE = {
+    'last_poll': 0,            # timestamp ultimo polling
+    'matches': {},            # matchId -> {home, away, score, status, minute}
+    'error': None,
+    'simulation': not LIVE_ENABLED,
+}
+# Memoria per la simulazione (avanzamento finto di una partita)
+_SIM = {'start': None}
+
+def _norm(name):
+    """Normalizza un nome squadra per il confronto."""
+    return (name or '').strip().lower()
+
+def _alias(name):
+    return LIVE_TEAM_ALIASES.get(name, name)
+
+def _build_alias_lookup():
+    """Mappa nome-API (lower) -> nostro matchId, per ogni partita conosciuta."""
+    lut = {}
+    def add(mid, home, away):
+        key = (_norm(_alias(home)), _norm(_alias(away)))
+        lut[key] = {'matchId': mid, 'home': home, 'away': away}
+    for grp in WC_MATCH_SCHEDULE.values():
+        for m in grp:
+            add(m['id'], m['home'], m['away'])
+    # amichevoli, se presenti
+    for m in FRIENDLY_SCHEDULE:
+        add(m['id'], m['home'], m['away'])
+    return lut
+
+# Calendario amichevoli lato server (specchio di data_friendlies.js) per il matching
+FRIENDLY_SCHEDULE = [
+    {'id':'fr-01','kickoff':'2026-06-05T17:45:00Z','home':'Ungheria','away':'Finlandia'},
+    {'id':'fr-02','kickoff':'2026-06-06T13:00:00Z','home':'Belgio','away':'Tunisia'},
+    {'id':'fr-03','kickoff':'2026-06-06T17:45:00Z','home':'Portogallo','away':'Cile'},
+    {'id':'fr-04','kickoff':'2026-06-06T19:00:00Z','home':'Inghilterra','away':'Nuova Zelanda'},
+    {'id':'fr-05','kickoff':'2026-06-07T16:30:00Z','home':'Danimarca','away':'Ucraina'},
+    {'id':'fr-06','kickoff':'2026-06-07T18:45:00Z','home':'Croazia','away':'Slovenia'},
+    {'id':'fr-07','kickoff':'2026-06-07T18:45:00Z','home':'Grecia','away':'Italia'},
+    {'id':'fr-08','kickoff':'2026-06-08T19:10:00Z','home':'Francia','away':'Irlanda del Nord'},
+    {'id':'fr-09','kickoff':'2026-06-09T17:00:00Z','home':'Ungheria','away':'Kazakistan'},
+    {'id':'fr-10','kickoff':'2026-06-10T19:00:00Z','home':'Inghilterra','away':'Costa Rica'},
+    {'id':'fr-11','kickoff':'2026-06-10T19:45:00Z','home':'Portogallo','away':'Nigeria'},
+]
+
+def _fetch_live_real():
+    """Interroga football-data.org per le partite del Mondiale (LIVE + FINISHED)."""
+    headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
+    url = f"{FOOTBALL_DATA_BASE}/competitions/{WC_COMPETITION_CODE}/matches"
+    req = _urlreq.Request(url, headers=headers)
+    with _urlreq.urlopen(req, timeout=12) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+    lut = _build_alias_lookup()
+    found = {}
+    for m in data.get('matches', []):
+        h = m.get('homeTeam', {}).get('name') or ''
+        a = m.get('awayTeam', {}).get('name') or ''
+        key = (_norm(h), _norm(a))
+        match_ref = lut.get(key)
+        if not match_ref:
+            continue
+        score = m.get('score', {}).get('fullTime', {})
+        sh, sa = score.get('home'), score.get('away')
+        status = m.get('status', 'SCHEDULED')
+        score_str = f"{sh}-{sa}" if sh is not None and sa is not None else ''
+        found[match_ref['matchId']] = {
+            'home': match_ref['home'], 'away': match_ref['away'],
+            'score': score_str, 'status': status, 'minute': m.get('minute'),
+        }
+    return found
+
+# Demo override: se SIM_DEMO è attivo, una partita "gioca" in 90 secondi reali
+# per mostrare il meccanismo live anche fuori dagli orari veri delle partite.
+SIM_DEMO = {'match_id': None, 'start': None}
+
+def _sim_scripted(elapsed):
+    if   elapsed < 20: return '0-0', 'IN_PLAY', max(1, int(elapsed*2))
+    elif elapsed < 40: return '1-0', 'IN_PLAY', min(45, int(elapsed*1.2))
+    elif elapsed < 60: return '1-1', 'IN_PLAY', min(70, int(elapsed*1.2))
+    elif elapsed < 90: return '2-1', 'IN_PLAY', min(90, int(elapsed))
+    else:              return '2-1', 'FINISHED', 90
+
+def _fetch_live_sim():
+    """Simulazione realistica: ogni partita rispetta il suo orario di kickoff reale
+    (SCHEDULED prima, IN_PLAY per ~110', FINISHED dopo). Se è attivo SIM_DEMO,
+    quella partita 'gioca' in 90 secondi reali per il test immediato."""
+    now = datetime.now(timezone.utc)
+    out = {}
+    for fr in FRIENDLY_SCHEDULE:
+        mid = fr['id']
+        ko = fr.get('kickoff')
+        ko_dt = None
+        if ko:
+            try: ko_dt = datetime.fromisoformat(ko.replace('Z','+00:00'))
+            except Exception: ko_dt = None
+
+        # Demo override per il test
+        if SIM_DEMO['match_id'] == mid and SIM_DEMO['start'] is not None:
+            el = _time.time() - SIM_DEMO['start']
+            sc, stt, mn = _sim_scripted(el)
+            out[mid] = {'home':fr['home'],'away':fr['away'],'score':sc,'status':stt,'minute':mn}
+            continue
+
+        if ko_dt is None:
+            continue
+        mins = (now - ko_dt).total_seconds() / 60.0
+        if mins < 0:
+            out[mid] = {'home':fr['home'],'away':fr['away'],'score':'','status':'SCHEDULED','minute':None}
+        elif mins < 110:
+            # punteggio demo deterministico durante la diretta
+            sc = '0-0' if mins < 25 else '1-0' if mins < 55 else '1-1' if mins < 80 else '2-1'
+            out[mid] = {'home':fr['home'],'away':fr['away'],'score':sc,'status':'IN_PLAY','minute':int(min(90,mins))}
+        else:
+            out[mid] = {'home':fr['home'],'away':fr['away'],'score':'2-1','status':'FINISHED','minute':90}
+    return out
+
+def poll_live(force=False):
+    """Interroga la sorgente live (con cache di LIVE_POLL_SECONDS) e aggiorna RESULTS
+    per le sole partite FINISHED (i punti contano solo a partita finita)."""
+    now = _time.time()
+    if not force and (now - LIVE_STATE['last_poll']) < LIVE_POLL_SECONDS:
+        return LIVE_STATE
+    LIVE_STATE['last_poll'] = now
+    try:
+        if LIVE_ENABLED and _urlreq is not None:
+            matches = _fetch_live_real()
+            LIVE_STATE['simulation'] = False
+        else:
+            matches = _fetch_live_sim()
+            LIVE_STATE['simulation'] = True
+        LIVE_STATE['matches'] = matches
+        LIVE_STATE['error'] = None
+        # Aggiorna RESULTS per le partite FINISHED (così la classifica si muove)
+        for mid, info in matches.items():
+            if info['status'] == 'FINISHED' and info['score']:
+                h, a = map(int, info['score'].split('-'))
+                pick = '1' if h > a else '2' if a > h else 'X'
+                RESULTS[mid] = {'pick': pick, 'score': info['score']}
+    except Exception as e:
+        LIVE_STATE['error'] = str(e)
+    return LIVE_STATE
+
+@app.route('/api/live')
+def api_live():
+    """Stato live corrente: l'app frontend lo interroga periodicamente."""
+    poll_live()
+    kmap = _kickoff_map()
+    now = datetime.now(timezone.utc)
+    locked = {}
+    kickoffs = {}
+    for mid, ko in kmap.items():
+        kickoffs[mid] = ko.isoformat()
+        locked[mid] = match_locked(mid)
+    return jsonify({
+        'enabled': LIVE_ENABLED,
+        'simulation': LIVE_STATE['simulation'],
+        'matches': LIVE_STATE['matches'],
+        'locked': locked,
+        'kickoffs': kickoffs,
+        'server_time': now.isoformat(),
+        'error': LIVE_STATE['error'],
+        'poll_seconds': LIVE_POLL_SECONDS,
+    })
+
+@app.route('/api/sim_demo', methods=['POST'])
+@login_required
+@admin_required
+def sim_demo():
+    """[Solo test/simulazione] avvia la partita demo che 'gioca' in 90 secondi."""
+    if LIVE_ENABLED:
+        return jsonify({'error':'Demo non disponibile con dati reali attivi'}), 400
+    d = request.json or {}
+    mid = (d.get('matchId') or 'fr-01').strip()
+    SIM_DEMO['match_id'] = mid
+    SIM_DEMO['start'] = _time.time()
+    LIVE_STATE['last_poll'] = 0
+    poll_live(force=True)
+    return jsonify({'ok':True, 'match_id':mid})
+
+
+# ── Friendlies-only scoring & leaderboard (pre-World-Cup test) ─────────────
+FRIENDLY_IDS = {f'fr-{i:02d}' for i in range(1, 12)}
+
+def _calc_friendly_points(email):
+    preds = PREDICTIONS.get(email, {})
+    pts=0; correct=0; exact=0
+    for mid, pred in preds.items():
+        if mid not in FRIENDLY_IDS:
+            continue
+        res = RESULTS.get(mid)
+        if not res:
+            continue
+        score_ok = bool(pred.get('score')) and pred.get('score') == res.get('score')
+        pick_ok  = pred.get('pick') == res.get('pick')
+        if score_ok:   pts+=3; exact+=1; correct+=1
+        elif pick_ok:  pts+=1; correct+=1
+    return pts, correct, exact
+
+@app.route('/api/friendly_leaderboard')
+def friendly_leaderboard():
+    board=[]
+    for email in PREDICTIONS:
+        p = PROFILES.get(email, {})
+        pts, correct, exact = _calc_friendly_points(email)
+        # only show users who predicted at least one friendly
+        has_fr = any(mid in FRIENDLY_IDS for mid in PREDICTIONS.get(email, {}))
+        if not has_fr:
+            continue
+        board.append({'email':email,
+                      'nickname':p.get('nickname', email.split('@')[0]),
+                      'avatar':p.get('avatar','⚽'),
+                      'points':pts,'correct':correct,'exact':exact})
+    board.sort(key=lambda x:(-x['points'], -x['exact']))
+    return jsonify(board[:50])
+
+# ── Global leaderboard ─────────────────────────────────────────────────
+@app.route('/api/leaderboard')
+def leaderboard():
+    board=[]
+    for email in PREDICTIONS:
+        p=PROFILES.get(email,{})
+        pts,correct,exact=_calc_points(email)
+        board.append({'email':email,
+                      'nickname':p.get('nickname',email.split('@')[0]),
+                      'avatar':p.get('avatar','⚽'),
+                      'points':pts,'correct':correct,'exact':exact,
+                      'submitted':len(SUBMITTED.get(email,[]))})
+    board.sort(key=lambda x:-x['points'])
+    return jsonify(board[:20])
+
+# ── Admin: elenco completo degli utenti registrati ────────────────────
+@app.route('/api/admin/users')
+@login_required
+@admin_required
+def admin_users():
+    users = []
+    for email in USERS:
+        p = PROFILES.get(email, {})
+        pts, correct, exact = _calc_points(email)
+        leagues = [LEAGUES[lid]['name'] for lid in USER_LEAGUES.get(email, []) if lid in LEAGUES]
+        users.append({
+            'email': email,
+            'nickname': p.get('nickname', email.split('@')[0]),
+            'avatar': p.get('avatar', '⚽'),
+            'created_at': p.get('created_at', '—'),
+            'points': pts, 'correct': correct, 'exact': exact,
+            'group_preds': len(PREDICTIONS.get(email, {})),
+            'ko_preds': len(KO_PRED.get(email, {})),
+            'submitted_groups': len(SUBMITTED.get(email, [])),
+            'ko_submitted': bool(KO_SUBMITTED.get(email, False)),
+            'leagues': leagues,
+            'is_admin': email == ADMIN_EMAIL,
+        })
+    users.sort(key=lambda u: u['nickname'].lower())
+    return jsonify({'count': len(users), 'users': users})
+
+# ── User profile ───────────────────────────────────────────────────────
+@app.route('/api/profile/<nickname>')
+def get_profile(nickname):
+    for email,p in PROFILES.items():
+        if p.get('nickname','').lower() == nickname.lower():
+            pts,correct,exact = _calc_points(email)
+            leagues = [_league_public(lid) for lid in USER_LEAGUES.get(email,[]) if lid in LEAGUES]
+            return jsonify({'email':email,'nickname':p['nickname'],
+                            'avatar':p.get('avatar','⚽'),
+                            'created_at':p.get('created_at','—'),
+                            'points':pts,'correct':correct,'exact':exact,
+                            'submitted':len(SUBMITTED.get(email,[])),
+                            'topscorer':TOPSCORER_PRED.get(email,''),
+                            'final_pred':FINAL_PRED.get(email,{}),
+                            'leagues':leagues})
+    return jsonify({'error':'Profilo non trovato'}), 404
+
+# ── Players API proxy ──────────────────────────────────────────────────
+@app.route('/api/players/search')
+@login_required
+def search_players():
+    query = request.args.get('q','').strip()
+    if not query or len(query)<2:
+        return jsonify({'players':[]})
+    if not API_FOOTBALL_KEY:
+        # Return static fallback if no key configured
+        return jsonify({'players':[], 'error':'API key non configurata. Imposta API_FOOTBALL_KEY nel file config.py'})
+    import requests as req
+    try:
+        resp = req.get('https://v3.football.api-sports.io/players',
+            headers={'x-apisports-key': API_FOOTBALL_KEY},
+            params={'search': query, 'league': 1, 'season': 2026},
+            timeout=8)
+        data = resp.json()
+        players = []
+        for item in data.get('response',[]):
+            pl = item.get('player',{})
+            st = item.get('statistics',[{}])[0]
+            players.append({
+                'id':       pl.get('id'),
+                'name':     pl.get('name',''),
+                'age':      pl.get('age',''),
+                'nationality': pl.get('nationality',''),
+                'photo':    pl.get('photo',''),
+                'position': st.get('games',{}).get('position',''),
+                'goals':    st.get('goals',{}).get('total',0) or 0,
+                'assists':  st.get('goals',{}).get('assists',0) or 0,
+                'games':    st.get('games',{}).get('appearences',0) or 0,
+                'rating':   float(st.get('games',{}).get('rating',0) or 0),
+            })
+        return jsonify({'players': players})
+    except Exception as e:
+        return jsonify({'players':[], 'error': str(e)})
+
+# ── Excel export ───────────────────────────────────────────────────────
+@app.route('/api/export_excel')
+@login_required
+@admin_required
+def export_excel():
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)
+    hdr_fill  = PatternFill("solid", fgColor="1A3A1A")
+    hdr_font  = Font(bold=True, color="C8A44A", size=11)
+    ttl_fill  = PatternFill("solid", fgColor="0A1A0A")
+    ttl_font  = Font(bold=True, color="FFFFFF", size=13)
+    # Row backgrounds: light, high-contrast so dark text is always readable
+    white_fill = PatternFill("solid", fgColor="FFFFFF")
+    alt_fill   = PatternFill("solid", fgColor="EDF3ED")   # very light green-grey
+    ok_fill    = PatternFill("solid", fgColor="D6F5D6")   # light green (exact)
+    ko_fill    = PatternFill("solid", fgColor="F9DADA")   # light red (wrong)
+    # Dark text on light backgrounds
+    data_font    = Font(color="1A1A1A", size=11)
+    data_font_ok = Font(color="0A7A0A", size=11, bold=True)
+    data_font_ko = Font(color="B01818", size=11)
+    thin      = Side(style='thin', color="C8D4C8")
+    border    = Border(left=thin, right=thin, top=thin, bottom=thin)
+    center    = Alignment(horizontal='center', vertical='center')
+    wrap      = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    HEADERS   = ['Email','Nickname','Match ID','Partita','1/X/2','Punteggio','Ris. Reale','Score Reale','Punti','Inviato','Data Export']
+    WIDTHS    = [28, 18, 14, 34, 8, 14, 12, 12, 8, 10, 20]
+    now_str   = datetime.now().strftime('%d/%m/%Y %H:%M')
+
+    # Build match label map  id → "Casa – Ospite"
+    match_labels = {}
+    for grp_data in WC_MATCH_SCHEDULE.values():
+        for m in grp_data:
+            match_labels[m['id']] = f"{m['home']} – {m['away']}"
+
+    for grp in WC_GROUPS:
+        ws = wb.create_sheet(title=f"Girone {grp}")
+        ws.merge_cells(f'A1:{get_column_letter(len(HEADERS))}1')
+        c = ws['A1']
+        c.value = f"TOTO CALCIO 2026 – Girone {grp}"
+        c.fill = ttl_fill; c.font = ttl_font; c.alignment = center
+        ws.row_dimensions[1].height = 28
+
+        for col, (h, w) in enumerate(zip(HEADERS, WIDTHS), 1):
+            c = ws.cell(row=2, column=col, value=h)
+            c.fill = hdr_fill; c.font = hdr_font; c.alignment = center; c.border = border
+            ws.column_dimensions[get_column_letter(col)].width = w
+
+        row_i = 3
+        # Include ALL users that have any prediction for this group (submitted or not)
+        for email, preds in sorted(PREDICTIONS.items()):
+            grp_preds = {k: v for k, v in preds.items() if k.startswith(f'wc-{grp}-')}
+            if not grp_preds:
+                continue
+            nick       = PROFILES.get(email, {}).get('nickname', email.split('@')[0])
+            submitted  = grp in SUBMITTED.get(email, [])
+
+            for mid, pred in sorted(grp_preds.items()):
+                res   = RESULTS.get(mid, {})
+                pick  = pred.get('pick', '')
+                score = pred.get('score', '')
+                rp    = res.get('pick', '—')
+                rs    = res.get('score', '—')
+                label = match_labels.get(mid, mid)
+                pts   = '—'
+                row_fill = alt_fill if row_i % 2 == 0 else white_fill
+
+                if res and pick:
+                    if score and score == rs:
+                        pts = 3
+                        row_fill = ok_fill
+                    elif pick == rp:
+                        pts = 1
+                    else:
+                        pts = 0
+                        row_fill = ko_fill
+
+                values = [email, nick, mid, label, pick or '—', score or '—',
+                          rp, rs, pts, 'Sì' if submitted else 'No', now_str]
+                # Pick font color based on outcome for readability
+                if pts == 3:    cell_font = data_font_ok
+                elif pts == 0:  cell_font = data_font_ko
+                else:           cell_font = data_font
+                for col, val in enumerate(values, 1):
+                    c = ws.cell(row=row_i, column=col, value=val)
+                    c.alignment = center; c.border = border; c.font = cell_font
+                    c.fill = row_fill
+                row_i += 1
+
+        # Totals row per user per group
+        ws.freeze_panes = 'A3'
+
+    # ── Summary sheet ──────────────────────────────────────────────────────────
+    ws_sum = wb.create_sheet(title="Classifica", index=0)
+    ws_sum.merge_cells('A1:F1')
+    c = ws_sum['A1']
+    c.value = f"CLASSIFICA GLOBALE – Esportato {now_str}"
+    c.fill = ttl_fill; c.font = ttl_font; c.alignment = center
+    ws_sum.row_dimensions[1].height = 28
+    sum_headers = ['#', 'Email', 'Nickname', 'Punti', 'Corretti', 'Esatti']
+    sum_widths  = [6, 30, 20, 10, 12, 10]
+    for col, (h, w) in enumerate(zip(sum_headers, sum_widths), 1):
+        c = ws_sum.cell(row=2, column=col, value=h)
+        c.fill = hdr_fill; c.font = hdr_font; c.alignment = center; c.border = border
+        ws_sum.column_dimensions[get_column_letter(col)].width = w
+    leaderboard = sorted(
+        [_calc_points(e) + (e,) for e in USERS],
+        key=lambda x: (-x[0], -x[1])
+    )
+    for i, (pts, correct, exact, email) in enumerate(leaderboard, 1):
+        nick = PROFILES.get(email, {}).get('nickname', email.split('@')[0])
+        row  = [i, email, nick, pts, correct, exact]
+        fill = alt_fill if i % 2 == 0 else white_fill
+        for col, val in enumerate(row, 1):
+            c = ws_sum.cell(row=i+2, column=col, value=val)
+            c.alignment = center; c.border = border; c.font = data_font
+            c.fill = fill
+    ws_sum.freeze_panes = 'A3'
+
+    # ── Special predictions sheet ──────────────────────────────────────────────
+    ws_sp = wb.create_sheet(title="Pronostici Speciali")
+    ws_sp.merge_cells('A1:F1')
+    c = ws_sp['A1']
+    c.value = "PRONOSTICI SPECIALI – Capocannoniere & Finale"
+    c.fill = ttl_fill; c.font = ttl_font; c.alignment = center
+    sp_headers = ['Email', 'Nickname', 'Capocannoniere', 'Finaliste', 'Risultato Finale', 'Vincitore']
+    sp_widths  = [28, 18, 22, 36, 20, 18]
+    for col, (h, w) in enumerate(zip(sp_headers, sp_widths), 1):
+        c = ws_sp.cell(row=2, column=col, value=h)
+        c.fill = hdr_fill; c.font = hdr_font; c.alignment = center; c.border = border
+        ws_sp.column_dimensions[get_column_letter(col)].width = w
+    row_i = 3
+    for email in sorted(USERS):
+        ts = TOPSCORER_PRED.get(email, '')
+        fp = FINAL_PRED.get(email, {})
+        if not ts and not fp:
+            continue
+        nick = PROFILES.get(email, {}).get('nickname', email.split('@')[0])
+        finaliste = f"{fp.get('home','?')} vs {fp.get('away','?')}" if fp else '—'
+        fscore    = fp.get('score', '—') if fp else '—'
+        fwin      = fp.get('winner', '—') if fp else '—'
+        values = [email, nick, ts or '—', finaliste, fscore, fwin]
+        fill = alt_fill if row_i % 2 == 0 else white_fill
+        for col, val in enumerate(values, 1):
+            c = ws_sp.cell(row=row_i, column=col, value=val)
+            c.alignment = center; c.border = border; c.font = data_font
+            c.fill = fill
+        row_i += 1
+
+    # ── Knockout phase sheet (user's bracket predictions) ──────────────────────
+    ws_ko = wb.create_sheet(title="Fase Eliminazione")
+    ws_ko.merge_cells('A1:F1')
+    c = ws_ko['A1']
+    c.value = "FASE AD ELIMINAZIONE DIRETTA – Pronostici"
+    c.fill = ttl_fill; c.font = ttl_font; c.alignment = center
+    ws_ko.row_dimensions[1].height = 28
+    ko_headers = ['Email', 'Nickname', 'Turno', 'Sfida', 'Risultato', 'Qualificata (suppl./rig.)']
+    ko_widths  = [26, 16, 16, 20, 12, 24]
+    for col, (h, w) in enumerate(zip(ko_headers, ko_widths), 1):
+        c = ws_ko.cell(row=2, column=col, value=h)
+        c.fill = hdr_fill; c.font = hdr_font; c.alignment = center; c.border = border
+        ws_ko.column_dimensions[get_column_letter(col)].width = w
+    row_i = 3
+    for email in sorted(USERS):
+        kp = KO_PRED.get(email, {})
+        if not kp:
+            continue
+        nick = PROFILES.get(email, {}).get('nickname', email.split('@')[0])
+        submitted_ko = 'Sì' if KO_SUBMITTED.get(email, False) else 'No'
+        for mid, label, matchup in WC_KO_META:
+            pred = kp.get(mid)
+            if not pred:
+                continue
+            score = pred.get('score', '—')
+            adv   = pred.get('adv', '')
+            # advancement only meaningful on a draw
+            adv_disp = adv if adv else '—'
+            values = [email, nick, label, matchup, score, adv_disp]
+            fill = alt_fill if row_i % 2 == 0 else white_fill
+            for col, val in enumerate(values, 1):
+                c = ws_ko.cell(row=row_i, column=col, value=val)
+                c.alignment = center; c.border = border; c.font = data_font
+                c.fill = fill
+            row_i += 1
+    ws_ko.freeze_panes = 'A3'
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(buf, download_name='toto_calcio_mondiale_2026.xlsx', as_attachment=True,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+# ── Deadline ───────────────────────────────────────────────────────────
+@app.route('/api/deadline')
+def deadline_info():
+    now=datetime.now(timezone.utc); passed=now>WC_DEADLINE
+    return jsonify({'passed':passed,'seconds_remaining':max(0,int((WC_DEADLINE-now).total_seconds()))})
+
+# ── Join via link (page) ───────────────────────────────────────────────
+@app.route('/join/<lid>')
+def join_page(lid):
+    return render_template('index.html')
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+# ── Sicurezza: header HTTP su ogni risposta ────────────────────────────
+@app.after_request
+def _security_headers(resp):
+    # Impedisce di indovinare il MIME type
+    resp.headers['X-Content-Type-Options'] = 'nosniff'
+    # Niente embedding in iframe altrui (anti clickjacking)
+    resp.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    # Non perdere il referer verso siti esterni
+    resp.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+    # Limita le feature del browser
+    resp.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
+    # In produzione (HTTPS) attiva HSTS: forza https per 1 anno
+    if _is_prod:
+        resp.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    return resp
+
+# Forza HTTPS in produzione (se il proxy segnala connessione non sicura)
+@app.before_request
+def _force_https():
+    if _is_prod and not request.is_secure:
+        # X-Forwarded-Proto viene gestito da ProxyFix; se ancora http → redirect
+        proto = request.headers.get('X-Forwarded-Proto', 'http')
+        if proto != 'https':
+            from flask import redirect
+            return redirect(request.url.replace('http://', 'https://', 1), code=301)
+
+# ── Health check (per uptime monitor / load balancer) ──────────────────
+@app.route('/healthz')
+def _healthz():
+    return jsonify({'status':'ok'}), 200
+
+# ── Error handlers ─────────────────────────────────────────────────────
+@app.errorhandler(404)
+def _not_found(e):
+    if request.path.startswith('/api/'):
+        return jsonify({'error':'Risorsa non trovata'}), 404
+    return render_template('index.html'), 200
+
+@app.errorhandler(413)
+def _too_large(e):
+    return jsonify({'error':'Richiesta troppo grande (max 1MB)'}), 413
+
+@app.errorhandler(500)
+def _server_error(e):
+    return jsonify({'error':'Errore interno del server'}), 500
+
+if __name__=='__main__':
+    # debug SOLO in sviluppo; in produzione si usa gunicorn (vedi Procfile)
+    debug = os.environ.get('FLASK_DEBUG') == '1'
+    port  = int(os.environ.get('PORT', 5001))
+    app.run(host='0.0.0.0', port=port, debug=debug)

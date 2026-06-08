@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Totò Calcio 2026 — FIFA World Cup</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23C8A44A'/><text x='16' y='23' font-size='20' text-anchor='middle' fill='%23001533'>TC</text></svg>"/>
+
+  <!-- Google Fonts: Bebas Neue (display) + DM Sans (body) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
+
+  <!-- Font Awesome 6 Free -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous"/>
+
+  <!-- Tailwind CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.2.1/flowbite.min.js" defer></script>
+  <script>
+    // Tailwind config before CDN loads
+    window.tailwindConfig = {
+      theme: {
+        extend: {
+          colors: {
+            gold:    { DEFAULT:'#C8A44A', light:'#E0C06E', dark:'#9A7A30' },
+            navy:    { DEFAULT:'#001533', mid:'#0D2147', light:'#1A3566' },
+            wc:      { red:'#E8192C', blue:'#003DA5' },
+          },
+          fontFamily: {
+            display: ['"Bebas Neue"','cursive'],
+            body:    ['"DM Sans"','sans-serif'],
+          },
+        }
+      }
+    };
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    /* ── Base overrides ─────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: #000D1F;
+      color: #EEF3FF;
+      -webkit-font-smoothing: antialiased;
+    }
+    #app { min-height: 100vh; }
+
+    /* ── Scrollbar ──────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar-track { background: #000D1F; }
+    ::-webkit-scrollbar-thumb { background: #C8A44A44; border-radius: 3px; }
+
+    /* ── Typography ─────────────────────────────────────────────────── */
+    .font-display { font-family: 'Bebas Neue', cursive; }
+
+    /* ── Background mesh ────────────────────────────────────────────── */
+    .bg-mesh {
+      background:
+        radial-gradient(ellipse 120% 60% at 50% -5%,  rgba(0,61,165,0.35) 0%, transparent 65%),
+        radial-gradient(ellipse 50%  50% at 90% 100%, rgba(200,164,74,0.1) 0%, transparent 60%),
+        radial-gradient(ellipse 40%  40% at 5%  80%,  rgba(232,25,44,0.08) 0%, transparent 60%),
+        #000D1F;
+    }
+
+    /* ── Gold gradient text ─────────────────────────────────────────── */
+    .text-gold-grad {
+      background: linear-gradient(135deg, #E0C06E 0%, #C8A44A 50%, #9A7A30 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    /* ── Glass card ─────────────────────────────────────────────────── */
+    .glass {
+      background: rgba(13,33,71,0.6);
+      backdrop-filter: blur(20px);
+      border: 1px solid rgba(200,164,74,0.18);
+      box-shadow: 0 8px 48px rgba(0,0,0,0.5), inset 0 1px 0 rgba(200,164,74,0.08);
+    }
+
+    /* ── Input styles ───────────────────────────────────────────────── */
+    .tc-input {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 0.5rem;
+      color: #fff;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.95rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .tc-input:focus {
+      border-color: #C8A44A;
+      box-shadow: 0 0 0 3px rgba(200,164,74,0.15);
+    }
+    .tc-input::placeholder { color: rgba(255,255,255,0.25); }
+
+    /* ── Button gold ────────────────────────────────────────────────── */
+    .btn-gold {
+      width: 100%;
+      padding: 0.85rem 1rem;
+      background: linear-gradient(135deg, #E0C06E, #C8A44A, #9A7A30);
+      color: #001533;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 700;
+      font-size: 0.9rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border: none;
+      border-radius: 0.625rem;
+      cursor: pointer;
+      transition: filter 0.2s, transform 0.2s, box-shadow 0.2s;
+    }
+    .btn-gold:hover:not(:disabled) {
+      filter: brightness(1.1);
+      transform: translateY(-1px);
+      box-shadow: 0 8px 28px rgba(200,164,74,0.4);
+    }
+    .btn-gold:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    /* ── Topbar ─────────────────────────────────────────────────────── */
+    .topbar {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(0,13,31,0.92);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid rgba(200,164,74,0.12);
+      padding: 0 1.5rem;
+      height: 60px;
+      display: flex;
+      align-items: center;
+    }
+
+    /* ── Deadline banner ────────────────────────────────────────────── */
+    .deadline-bar {
+      background: linear-gradient(90deg, rgba(0,61,165,0.15), rgba(200,164,74,0.08), rgba(232,25,44,0.1));
+      border-bottom: 1px solid rgba(200,164,74,0.1);
+      padding: 0.45rem 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    /* ── Match card ─────────────────────────────────────────────────── */
+    .match-card {
+      background: rgba(13,33,71,0.45);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 0.875rem;
+      padding: 1rem 1.125rem;
+      transition: border-color 0.2s, transform 0.15s;
+    }
+    .match-card:hover { border-color: rgba(200,164,74,0.2); }
+    .match-card.predicted { border-color: rgba(200,164,74,0.3); }
+    .match-card.locked { opacity: 0.75; }
+
+    /* ── Pred buttons ───────────────────────────────────────────────── */
+    .pred-btn {
+      flex: 1;
+      padding: 0.6rem 0;
+      border-radius: 0.5rem;
+      border: 2px solid;
+      font-family: 'Bebas Neue', cursive;
+      font-size: 1.2rem;
+      letter-spacing: 0.1em;
+      cursor: pointer;
+      background: transparent;
+      transition: all 0.15s;
+    }
+    .pred-btn-1  { border-color: rgba(0,61,165,0.6);   color: #93c5fd; }
+    .pred-btn-1.active  { background: #003DA5; border-color: #003DA5; color: #fff; box-shadow: 0 0 14px rgba(0,61,165,0.5); }
+    .pred-btn-1:not(.active):hover { background: rgba(0,61,165,0.2); }
+    .pred-btn-x  { border-color: rgba(200,164,74,0.5); color: #C8A44A; }
+    .pred-btn-x.active  { background: #C8A44A; border-color: #C8A44A; color: #001533; box-shadow: 0 0 14px rgba(200,164,74,0.4); }
+    .pred-btn-x:not(.active):hover { background: rgba(200,164,74,0.15); }
+    .pred-btn-2  { border-color: rgba(232,25,44,0.5);  color: #fca5a5; }
+    .pred-btn-2.active  { background: #E8192C; border-color: #E8192C; color: #fff; box-shadow: 0 0 14px rgba(232,25,44,0.4); }
+    .pred-btn-2:not(.active):hover { background: rgba(232,25,44,0.15); }
+
+    /* ── Score input ────────────────────────────────────────────────── */
+    .score-inp {
+      width: 44px; text-align: center;
+      padding: 0.3rem 0.25rem;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 0.375rem;
+      color: #fff;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 1rem; font-weight: 700;
+      outline: none;
+    }
+    .score-inp:focus { border-color: #C8A44A; }
+
+    /* ── Group btn ──────────────────────────────────────────────────── */
+    .grp-btn {
+      width: 36px; height: 36px;
+      border-radius: 6px;
+      border: 1px solid rgba(200,164,74,0.25);
+      background: transparent;
+      color: #C8A44A;
+      font-family: 'Bebas Neue', cursive;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+    }
+    .grp-btn:hover { background: rgba(200,164,74,0.1); }
+    .grp-btn.active { background: #C8A44A; color: #001533; border-color: #C8A44A; box-shadow: 0 0 12px rgba(200,164,74,0.4); }
+    .grp-btn .submitted-dot {
+      position: absolute; top: -3px; right: -3px;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #22c55e;
+      border: 1px solid #000D1F;
+    }
+
+    /* ── Avatar grid ────────────────────────────────────────────────── */
+    .avatar-opt {
+      aspect-ratio: 1;
+      border-radius: 0.5rem;
+      font-size: 1.4rem;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(255,255,255,0.04);
+      border: 2px solid transparent;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .avatar-opt:hover { background: rgba(255,255,255,0.09); }
+    .avatar-opt.selected { border-color: #C8A44A; background: rgba(200,164,74,0.15); }
+
+    /* ── Submit group wrap ──────────────────────────────────────────── */
+    .btn-submit-group {
+      padding: 0.85rem 2.5rem;
+      border-radius: 0.75rem;
+      background: linear-gradient(135deg, #E8192C, #b01020);
+      color: #fff;
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 700;
+      font-size: 0.9rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 4px 20px rgba(232,25,44,0.3);
+      transition: all 0.2s;
+    }
+    .btn-submit-group:hover:not(:disabled) {
+      filter: brightness(1.1);
+      transform: translateY(-1px);
+      box-shadow: 0 8px 28px rgba(232,25,44,0.4);
+    }
+    .btn-submit-group:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+    /* ── Result badges ──────────────────────────────────────────────── */
+    .badge-exact   { background: rgba(200,164,74,0.12); border: 1px solid rgba(200,164,74,0.3); color: #E0C06E; }
+    .badge-correct { background: rgba(34,197,94,0.1);   border: 1px solid rgba(34,197,94,0.25); color: #86efac; }
+    .badge-wrong   { background: rgba(232,25,44,0.08);  border: 1px solid rgba(232,25,44,0.2);  color: #fca5a5; }
+
+    /* ── Leaderboard ────────────────────────────────────────────────── */
+    .lb-row { transition: background 0.15s; border-radius: 0.5rem; }
+    .lb-row:hover { background: rgba(255,255,255,0.04); }
+    .lb-me { background: rgba(200,164,74,0.08); border: 1px solid rgba(200,164,74,0.15); }
+
+    /* ── Odd box ────────────────────────────────────────────────────── */
+    .odd-box { flex: 1; text-align: center; border-radius: 0.375rem; padding: 4px 0; border: 1px solid; }
+    .odd-1 { background: rgba(0,61,165,0.14);  border-color: rgba(0,61,165,0.28); }
+    .odd-x { background: rgba(200,164,74,0.1); border-color: rgba(200,164,74,0.22); }
+    .odd-2 { background: rgba(232,25,44,0.1);  border-color: rgba(232,25,44,0.22); }
+    .odd-e { background: rgba(34,197,94,0.07); border-color: rgba(34,197,94,0.18); }
+
+    /* ── Comp card ──────────────────────────────────────────────────── */
+    .comp-card-wc {
+      background: linear-gradient(145deg, #0D1E40 0%, #060E22 100%);
+      border: 1px solid rgba(200,164,74,0.2);
+      border-radius: 1.25rem;
+      padding: 1.75rem;
+      transition: border-color 0.25s, box-shadow 0.25s, transform 0.25s;
+      cursor: pointer;
+      position: relative; overflow: hidden;
+    }
+    .comp-card-wc::before {
+      content: '';
+      position: absolute; top: -60px; right: -60px;
+      width: 200px; height: 200px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(200,164,74,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .comp-card-wc:hover {
+      border-color: rgba(200,164,74,0.5);
+      box-shadow: 0 12px 48px rgba(0,0,0,0.5), 0 0 0 1px rgba(200,164,74,0.15);
+      transform: translateY(-3px);
+    }
+    .comp-card-sa {
+      background: linear-gradient(145deg, #0D1E40 0%, #060E22 100%);
+      border: 1px solid rgba(59,130,246,0.15);
+      border-radius: 1.25rem;
+      padding: 1.75rem;
+      opacity: 0.5;
+      cursor: not-allowed;
+      position: relative; overflow: hidden;
+    }
+
+    /* ── Animations ─────────────────────────────────────────────────── */
+    @keyframes fadeIn   { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:none} }
+    @keyframes slideIn  { from{opacity:0;transform:translateX(-16px)} to{opacity:1;transform:none} }
+    @keyframes pulseDot { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    @keyframes spin     { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+    .anim-fade  { animation: fadeIn  0.35s ease both; }
+    .anim-slide { animation: slideIn 0.3s  ease both; }
+    .timer-danger { animation: pulseDot 1s ease-in-out infinite; color: #E8192C !important; }
+    .spinner { animation: spin 0.9s linear infinite; }
+
+    /* ── Responsive ─────────────────────────────────────────────────── */
+    @media (max-width:640px) {
+      .topbar { padding: 0 1rem; }
+      .hide-mobile { display: none !important; }
+    }
+
+    /* ── tc-label ───────────────────────────────────────────────────── */
+    .tc-label {
+      display: block;
+      color: rgba(255,255,255,0.4);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 0.4rem;
+    }
+    /* ── Topbar height for sticky sub-nav ──────────────────────────── */
+    .topbar { height: 60px; }
+
+    /* ── Leagues ────────────────────────────────────────────────────── */
+    .deadline-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      padding: 0.45rem 1.5rem;
+      background: linear-gradient(90deg, rgba(0,61,165,0.12), rgba(200,164,74,0.07), rgba(232,25,44,0.08));
+      border-bottom: 1px solid rgba(200,164,74,0.09);
+      min-height: 38px;
+    }
+
+    /* ── Modal overlay click-outside close ─────────────────────────── */
+    [id^="modal-"] { cursor: default; }
+
+    /* Remove number input spinners everywhere */
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
+    .score-inp::-webkit-inner-spin-button,
+    .score-inp::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    .score-inp:focus { border-color: #C8A44A !important; background: rgba(200,164,74,0.1) !important; }
+
+    /* Live pulsing dot */
+    .live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ef4444;margin-right:5px;vertical-align:middle;box-shadow:0 0 0 0 rgba(239,68,68,0.6);animation:livePulse 1.4s infinite}
+    @keyframes livePulse{0%{box-shadow:0 0 0 0 rgba(239,68,68,0.6)}70%{box-shadow:0 0 0 7px rgba(239,68,68,0)}100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}
+  </style>
+</head>
+<body>
+  <div id="app">
+    <!-- Loading screen -->
+    <div class="bg-mesh" style="min-height:100vh;display:flex;align-items:center;justify-content:center;">
+      <div style="text-align:center;">
+        <div style="width:48px;height:48px;border:3px solid rgba(200,164,74,0.2);border-top-color:#C8A44A;border-radius:50%;margin:0 auto 1.25rem;animation:spin 0.9s linear infinite;"></div>
+        <div style="font-family:'Bebas Neue',cursive;font-size:1.5rem;color:#C8A44A;letter-spacing:0.15em;">TOTÒ CALCIO</div>
+        <div style="color:rgba(255,255,255,0.3);font-size:0.82rem;margin-top:0.25rem;">Caricamento in corso…</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/data_worldcup.js"></script>
+  <script src="/static/js/data_bracket.js"></script>
+  <script src="/static/js/data_friendlies.js"></script>
+  <script src="/static/js/data_squads.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

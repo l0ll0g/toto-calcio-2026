@@ -43,14 +43,17 @@ WC_DEADLINE  = datetime(2026, 6, 11, 20, 59, 59, tzinfo=timezone.utc)
 WC_GROUPS    = ['A','B','C','D','E','F','G','H','I','J','K','L']
 API_FOOTBALL_KEY = os.environ.get('API_FOOTBALL_KEY', '')
 
-# ── Live results: football-data.org ────────────────────────────────────────
-# Chiave gratuita su https://www.football-data.org/client/register
-# Incollala qui sotto (o impostala come variabile d'ambiente FOOTBALL_DATA_KEY).
-FOOTBALL_DATA_KEY  = os.environ.get('FOOTBALL_DATA_KEY', '')   # <-- INCOLLA QUI LA TUA CHIAVE
-FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4'
-WC_COMPETITION_CODE = 'WC'   # codice FIFA World Cup su football-data.org
+# ── Live results: API-Football (api-football.com) ──────────────────────────
+# Chiave gratuita: registrati su https://www.api-football.com (100 richieste/giorno).
+# Impostala come variabile d'ambiente API_FOOTBALL_KEY su Render.
+API_FOOTBALL_KEY  = os.environ.get('API_FOOTBALL_KEY', '')   # <-- chiave api-football.com
+API_FOOTBALL_BASE = 'https://v3.football.api-sports.io'
+WC_LEAGUE_ID      = 1        # ID lega FIFA World Cup su API-Football
+WC_SEASON         = 2026
+# (compat: se qualcuno avesse ancora la vecchia variabile, non rompe nulla)
+FOOTBALL_DATA_KEY  = os.environ.get('FOOTBALL_DATA_KEY', '')
 LIVE_POLL_SECONDS  = 60      # ogni quanto l'app interroga l'API (lato server cache)
-# Map: nome squadra nella nostra app -> nome su football-data.org
+# Map: nome squadra nella nostra app -> nome su API-Football (inglese)
 LIVE_TEAM_ALIASES = {
     'Corea del Sud':'South Korea','Repubblica Ceca':'Czech Republic','Sudafrica':'South Africa',
     'Messico':'Mexico','Germania':'Germany','Spagna':'Spain','Francia':'France','Inghilterra':'England',
@@ -60,13 +63,13 @@ LIVE_TEAM_ALIASES = {
     'Algeria':'Algeria','Austria':'Austria','Portogallo':'Portugal','Colombia':'Colombia','RD Congo':'DR Congo',
     'Ghana':'Ghana','Panama':'Panama','Uruguay':'Uruguay','Iran':'Iran','Iraq':'Iraq','Tunisia':'Tunisia',
     'Svezia':'Sweden','Ecuador':'Ecuador',"Costa d'Avorio":'Ivory Coast','Curacao':'Curaçao','Haiti':'Haiti',
-    'Scozia':'Scotland','Canada':'Canada','USA':'United States','Paraguay':'Paraguay','Australia':'Australia',
-    'Turchia':'Türkiye','Qatar':'Qatar','Bosnia':'Bosnia and Herzegovina','Argentina':'Argentina',
+    'Scozia':'Scotland','Canada':'Canada','USA':'USA','Paraguay':'Paraguay','Australia':'Australia',
+    'Turchia':'Turkey','Qatar':'Qatar','Bosnia':'Bosnia and Herzegovina','Argentina':'Argentina',
     'Ungheria':'Hungary','Finlandia':'Finland','Cile':'Chile','Slovenia':'Slovenia','Ucraina':'Ukraine',
     'Italia':'Italy','Grecia':'Greece','Irlanda del Nord':'Northern Ireland','Kazakistan':'Kazakhstan',
     'Costa Rica':'Costa Rica','Nigeria':'Nigeria',
 }
-LIVE_ENABLED = bool(FOOTBALL_DATA_KEY)
+LIVE_ENABLED = bool(API_FOOTBALL_KEY)
 
 # Match labels for Excel (id -> home/away)
 WC_MATCH_SCHEDULE = {
@@ -708,28 +711,39 @@ FRIENDLY_SCHEDULE = [
 ]
 
 def _fetch_live_real():
-    """Interroga football-data.org per le partite del Mondiale (LIVE + FINISHED)."""
-    headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
-    url = f"{FOOTBALL_DATA_BASE}/competitions/{WC_COMPETITION_CODE}/matches"
+    """Interroga API-Football per le partite del Mondiale (e amichevoli se note).
+    Doc: https://www.api-football.com/documentation-v3
+    Risposta: data['response'] = [ {fixture:{status:{short}}, teams:{home,away}, goals:{home,away}}, ... ]
+    """
+    headers = {'x-apisports-key': API_FOOTBALL_KEY}
+    url = f"{API_FOOTBALL_BASE}/fixtures?league={WC_LEAGUE_ID}&season={WC_SEASON}"
     req = _urlreq.Request(url, headers=headers)
     with _urlreq.urlopen(req, timeout=12) as resp:
         data = json.loads(resp.read().decode('utf-8'))
     lut = _build_alias_lookup()
     found = {}
-    for m in data.get('matches', []):
-        h = m.get('homeTeam', {}).get('name') or ''
-        a = m.get('awayTeam', {}).get('name') or ''
+    # Stati API-Football -> nostri stati
+    LIVE_CODES = {'1H','2H','HT','ET','BT','P','LIVE','INT'}     # in corso
+    DONE_CODES = {'FT','AET','PEN'}                              # finita
+    for item in data.get('response', []):
+        teams = item.get('teams', {})
+        h = (teams.get('home') or {}).get('name') or ''
+        a = (teams.get('away') or {}).get('name') or ''
         key = (_norm(h), _norm(a))
         match_ref = lut.get(key)
         if not match_ref:
             continue
-        score = m.get('score', {}).get('fullTime', {})
-        sh, sa = score.get('home'), score.get('away')
-        status = m.get('status', 'SCHEDULED')
+        goals = item.get('goals', {})
+        sh, sa = goals.get('home'), goals.get('away')
+        short = ((item.get('fixture') or {}).get('status') or {}).get('short', 'NS')
+        if   short in DONE_CODES: status = 'FINISHED'
+        elif short in LIVE_CODES: status = 'IN_PLAY'
+        else:                     status = 'SCHEDULED'
         score_str = f"{sh}-{sa}" if sh is not None and sa is not None else ''
+        minute = ((item.get('fixture') or {}).get('status') or {}).get('elapsed')
         found[match_ref['matchId']] = {
             'home': match_ref['home'], 'away': match_ref['away'],
-            'score': score_str, 'status': status, 'minute': m.get('minute'),
+            'score': score_str, 'status': status, 'minute': minute,
         }
     return found
 
@@ -745,9 +759,9 @@ def _sim_scripted(elapsed):
     else:              return '2-1', 'FINISHED', 90
 
 def _fetch_live_sim():
-    """Simulazione realistica: ogni partita rispetta il suo orario di kickoff reale
-    (SCHEDULED prima, IN_PLAY per ~110', FINISHED dopo). Se è attivo SIM_DEMO,
-    quella partita 'gioca' in 90 secondi reali per il test immediato."""
+    """Senza chiave reale NON inventiamo risultati: le amichevoli restano senza
+    punteggio (l'admin può inserirlo a mano dal pannello). L'unica eccezione è
+    SIM_DEMO, che l'admin attiva esplicitamente per vedere il meccanismo live."""
     now = datetime.now(timezone.utc)
     out = {}
     for fr in FRIENDLY_SCHEDULE:
@@ -758,7 +772,7 @@ def _fetch_live_sim():
             try: ko_dt = datetime.fromisoformat(ko.replace('Z','+00:00'))
             except Exception: ko_dt = None
 
-        # Demo override per il test
+        # Demo override: SOLO se l'admin l'ha avviata di proposito
         if SIM_DEMO['match_id'] == mid and SIM_DEMO['start'] is not None:
             el = _time.time() - SIM_DEMO['start']
             sc, stt, mn = _sim_scripted(el)
@@ -769,13 +783,14 @@ def _fetch_live_sim():
             continue
         mins = (now - ko_dt).total_seconds() / 60.0
         if mins < 0:
+            # non ancora iniziata
             out[mid] = {'home':fr['home'],'away':fr['away'],'score':'','status':'SCHEDULED','minute':None}
         elif mins < 110:
-            # punteggio demo deterministico durante la diretta
-            sc = '0-0' if mins < 25 else '1-0' if mins < 55 else '1-1' if mins < 80 else '2-1'
-            out[mid] = {'home':fr['home'],'away':fr['away'],'score':sc,'status':'IN_PLAY','minute':int(min(90,mins))}
+            # in corso: nessun punteggio finto, solo stato "in gioco"
+            out[mid] = {'home':fr['home'],'away':fr['away'],'score':'','status':'IN_PLAY','minute':int(min(90,mins))}
         else:
-            out[mid] = {'home':fr['home'],'away':fr['away'],'score':'2-1','status':'FINISHED','minute':90}
+            # finita: nessun risultato inventato. Resta da inserire a mano.
+            out[mid] = {'home':fr['home'],'away':fr['away'],'score':'','status':'FINISHED','minute':90}
     return out
 
 def poll_live(force=False):
@@ -825,6 +840,19 @@ def api_live():
         'error': LIVE_STATE['error'],
         'poll_seconds': LIVE_POLL_SECONDS,
     })
+
+@app.route('/api/admin/clear_friendly_results', methods=['POST'])
+@login_required
+@admin_required
+def clear_friendly_results():
+    """Cancella i risultati salvati per le amichevoli (utile per ripulire i
+    falsi risultati della vecchia simulazione)."""
+    removed = []
+    for mid in list(RESULTS.keys()):
+        if mid in FRIENDLY_IDS:
+            RESULTS.pop(mid)
+            removed.append(mid)
+    return jsonify({'ok': True, 'removed': removed, 'count': len(removed)})
 
 @app.route('/api/sim_demo', methods=['POST'])
 @login_required

@@ -449,7 +449,7 @@ def set_final_pred():
 # ── Results (admin) ────────────────────────────────────────────────────
 @app.route('/api/results', methods=['GET'])
 def get_results():
-    return jsonify(RESULTS)
+    return jsonify(dict(RESULTS))
 
 @app.route('/api/results', methods=['POST'])
 @login_required

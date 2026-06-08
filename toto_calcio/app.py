@@ -86,6 +86,8 @@ WC_MATCH_SCHEDULE = {
 
 # ── Persistent stores (SQLite-backed, survive restarts) ────────────────────
 from storage import PersistentDict
+import storage as _storage_mod
+print(f'[STORAGE] Backend attivo: {_storage_mod.backend_name()}', flush=True)
 USERS        = PersistentDict('users')        # email -> {pw}
 PROFILES     = PersistentDict('profiles')      # email -> {nickname, avatar, created_at}
 PREDICTIONS  = PersistentDict('predictions')   # email -> {matchId: {pick, score}}
@@ -297,7 +299,7 @@ def reset_password():
 @login_required
 @admin_required
 def admin_reset_tokens():
-    return jsonify(RESET_TOKENS)
+    return jsonify(dict(RESET_TOKENS))
 
 # ── Predictions ────────────────────────────────────────────────────────
 @app.route('/api/predictions', methods=['GET'])

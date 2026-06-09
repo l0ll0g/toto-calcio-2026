@@ -43,19 +43,22 @@ WC_DEADLINE  = datetime(2026, 6, 11, 20, 59, 59, tzinfo=timezone.utc)
 WC_GROUPS    = ['A','B','C','D','E','F','G','H','I','J','K','L']
 API_FOOTBALL_KEY = os.environ.get('API_FOOTBALL_KEY', '')
 
-# ── Live results: football-data.org ────────────────────────────────────────
-# Chiave gratuita su https://www.football-data.org/client/register
-# Il piano gratuito copre la FIFA World Cup (codice WC). Impostala come
-# variabile d'ambiente FOOTBALL_DATA_KEY su Render.
-FOOTBALL_DATA_KEY  = os.environ.get('FOOTBALL_DATA_KEY', '')
-FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4'
-# Competizione da interrogare. Default 'WC' (Mondiale). Per TESTARE prima del
-# Mondiale puoi impostare la variabile LIVE_COMPETITION='BSA' (campionato
-# brasiliano, in corso ora e incluso nel piano gratuito). A test finito,
-# rimettila a 'WC' (o rimuovi la variabile) per il Mondiale.
-WC_COMPETITION_CODE = os.environ.get('LIVE_COMPETITION', 'WC').strip() or 'WC'
-LIVE_POLL_SECONDS  = 60      # ogni quanto l'app interroga l'API (lato server cache)
-# Map: nome squadra nella nostra app -> nome su football-data.org (inglese)
+# ── Live results: Highlightly (soccer.highlightly.net) ─────────────────────
+# Chiave gratuita su https://highlightly.net/login (100 richieste/giorno).
+# Il piano gratuito copre amichevoli internazionali (lega "Friendlies") e i
+# campionati principali. Impostala come variabile d'ambiente HIGHLIGHTLY_KEY.
+HIGHLIGHTLY_KEY  = os.environ.get('HIGHLIGHTLY_KEY', '')
+HIGHLIGHTLY_BASE = 'https://soccer.highlightly.net'
+# Quale lega interrogare:
+#  - "9294"  = Amichevoli internazionali (per i test prima del Mondiale)
+#  - id lega FIFA World Cup = per il Mondiale (da impostare quando disponibile)
+# Configurabile via env LIVE_LEAGUE_ID. Default amichevoli per ora.
+LIVE_LEAGUE_ID   = os.environ.get('LIVE_LEAGUE_ID', '9294').strip() or '9294'
+LIVE_SEASON      = os.environ.get('LIVE_SEASON', '2026').strip() or '2026'
+LIVE_POLL_SECONDS = 60       # ogni quanto l'app interroga l'API (cache lato server)
+# (compat: vecchie variabili, non più usate dal motore ma non rompono nulla)
+FOOTBALL_DATA_KEY = os.environ.get('FOOTBALL_DATA_KEY', '')
+# Map: nome squadra nella nostra app -> nome su Highlightly (inglese)
 LIVE_TEAM_ALIASES = {
     'Corea del Sud':'South Korea','Repubblica Ceca':'Czech Republic','Sudafrica':'South Africa',
     'Messico':'Mexico','Germania':'Germany','Spagna':'Spain','Francia':'France','Inghilterra':'England',
@@ -65,13 +68,14 @@ LIVE_TEAM_ALIASES = {
     'Algeria':'Algeria','Austria':'Austria','Portogallo':'Portugal','Colombia':'Colombia','RD Congo':'DR Congo',
     'Ghana':'Ghana','Panama':'Panama','Uruguay':'Uruguay','Iran':'Iran','Iraq':'Iraq','Tunisia':'Tunisia',
     'Svezia':'Sweden','Ecuador':'Ecuador',"Costa d'Avorio":'Ivory Coast','Curacao':'Curaçao','Haiti':'Haiti',
-    'Scozia':'Scotland','Canada':'Canada','USA':'United States','Paraguay':'Paraguay','Australia':'Australia',
-    'Turchia':'Türkiye','Qatar':'Qatar','Bosnia':'Bosnia and Herzegovina','Argentina':'Argentina',
+    'Scozia':'Scotland','Canada':'Canada','USA':'USA','Paraguay':'Paraguay','Australia':'Australia',
+    'Turchia':'Turkey','Qatar':'Qatar','Bosnia':'Bosnia and Herzegovina','Argentina':'Argentina',
     'Ungheria':'Hungary','Finlandia':'Finland','Cile':'Chile','Slovenia':'Slovenia','Ucraina':'Ukraine',
     'Italia':'Italy','Grecia':'Greece','Irlanda del Nord':'Northern Ireland','Kazakistan':'Kazakhstan',
     'Costa Rica':'Costa Rica','Nigeria':'Nigeria',
+    'Islanda':'Iceland','Venezuela':'Venezuela','Pakistan':'Pakistan','Afghanistan':'Afghanistan',
 }
-LIVE_ENABLED = bool(FOOTBALL_DATA_KEY)
+LIVE_ENABLED = bool(HIGHLIGHTLY_KEY)
 
 # Match labels for Excel (id -> home/away)
 WC_MATCH_SCHEDULE = {
@@ -699,48 +703,55 @@ def _build_alias_lookup():
 
 # Calendario amichevoli lato server (specchio di data_friendlies.js) per il matching
 FRIENDLY_SCHEDULE = [
-    {'id':'fr-01','kickoff':'2026-06-05T17:45:00Z','home':'Ungheria','away':'Finlandia'},
-    {'id':'fr-02','kickoff':'2026-06-06T13:00:00Z','home':'Belgio','away':'Tunisia'},
-    {'id':'fr-03','kickoff':'2026-06-06T17:45:00Z','home':'Portogallo','away':'Cile'},
-    {'id':'fr-04','kickoff':'2026-06-06T19:00:00Z','home':'Inghilterra','away':'Nuova Zelanda'},
-    {'id':'fr-05','kickoff':'2026-06-07T16:30:00Z','home':'Danimarca','away':'Ucraina'},
-    {'id':'fr-06','kickoff':'2026-06-07T18:45:00Z','home':'Croazia','away':'Slovenia'},
-    {'id':'fr-07','kickoff':'2026-06-07T18:45:00Z','home':'Grecia','away':'Italia'},
-    {'id':'fr-08','kickoff':'2026-06-08T19:10:00Z','home':'Francia','away':'Irlanda del Nord'},
-    {'id':'fr-09','kickoff':'2026-06-09T17:00:00Z','home':'Ungheria','away':'Kazakistan'},
-    {'id':'fr-10','kickoff':'2026-06-10T19:00:00Z','home':'Inghilterra','away':'Costa Rica'},
-    {'id':'fr-11','kickoff':'2026-06-10T19:45:00Z','home':'Portogallo','away':'Nigeria'},
+    {'id':'fr-01','kickoff':'2026-06-09T23:00:00Z','home':'Senegal','away':'Arabia Saudita'},
+    {'id':'fr-02','kickoff':'2026-06-10T01:00:00Z','home':'Argentina','away':'Islanda'},
+    {'id':'fr-03','kickoff':'2026-06-10T01:00:00Z','home':'Iraq','away':'Venezuela'},
+    {'id':'fr-04','kickoff':'2026-06-10T16:00:00Z','home':'Pakistan','away':'Afghanistan'},
+    {'id':'fr-05','kickoff':'2026-06-10T19:45:00Z','home':'Portogallo','away':'Nigeria'},
 ]
 
+def _hl_status(desc):
+    """Mappa lo stato Highlightly (state.description) ai nostri 3 stati."""
+    d = (desc or '').lower()
+    if 'not started' in d or 'to be announced' in d or 'postponed' in d:
+        return 'SCHEDULED'
+    if any(k in d for k in ('finished', 'awarded')):
+        return 'FINISHED'
+    if any(k in d for k in ('first half','second half','half time','extra time',
+                            'break time','penalties','in progress','suspended','interrupted')):
+        return 'IN_PLAY'
+    return 'SCHEDULED'
+
 def _fetch_live_real():
-    """Interroga football-data.org per le partite del Mondiale (LIVE + FINISHED).
-    Doc: https://www.football-data.org/documentation/quickstart
+    """Interroga Highlightly per le partite della lega configurata (LIVE_LEAGUE_ID).
+    Doc: https://highlightly.net/football-api/documentation/
+    Risposta: data[] con homeTeam.name, awayTeam.name, state.description, state.score.current ("2 - 1").
     """
-    headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
-    url = f"{FOOTBALL_DATA_BASE}/competitions/{WC_COMPETITION_CODE}/matches"
+    headers = {'x-rapidapi-key': HIGHLIGHTLY_KEY}
+    url = f"{HIGHLIGHTLY_BASE}/matches?leagueId={LIVE_LEAGUE_ID}&season={LIVE_SEASON}&limit=100"
     req = _urlreq.Request(url, headers=headers)
     with _urlreq.urlopen(req, timeout=12) as resp:
         data = json.loads(resp.read().decode('utf-8'))
     lut = _build_alias_lookup()
     found = {}
-    for m in data.get('matches', []):
+    for m in data.get('data', []):
         h = (m.get('homeTeam') or {}).get('name') or ''
         a = (m.get('awayTeam') or {}).get('name') or ''
         key = (_norm(h), _norm(a))
         match_ref = lut.get(key)
         if not match_ref:
             continue
-        score = (m.get('score') or {}).get('fullTime') or {}
-        sh, sa = score.get('home'), score.get('away')
-        # Stati football-data.org: SCHEDULED, TIMED, IN_PLAY, PAUSED, FINISHED, ...
-        raw = m.get('status', 'SCHEDULED')
-        if   raw in ('IN_PLAY','PAUSED'): status = 'IN_PLAY'
-        elif raw == 'FINISHED':           status = 'FINISHED'
-        else:                             status = 'SCHEDULED'
-        score_str = f"{sh}-{sa}" if sh is not None and sa is not None else ''
+        st = m.get('state') or {}
+        status = _hl_status(st.get('description'))
+        cur = (st.get('score') or {}).get('current')   # es. "2 - 1" oppure None
+        score_str = ''
+        if cur and '-' in cur:
+            parts = [p.strip() for p in cur.split('-')]
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                score_str = f"{parts[0]}-{parts[1]}"
         found[match_ref['matchId']] = {
             'home': match_ref['home'], 'away': match_ref['away'],
-            'score': score_str, 'status': status, 'minute': m.get('minute'),
+            'score': score_str, 'status': status, 'minute': st.get('clock'),
         }
     return found
 
@@ -821,31 +832,31 @@ def poll_live(force=False):
 @admin_required
 def api_live_raw():
     """[Diagnostica admin] mostra le partite GREZZE ricevute dalla fonte live,
-    senza filtrare per le nostre squadre. Utile per testare il collegamento con
-    una competizione qualsiasi (es. LIVE_COMPETITION=BSA) prima del Mondiale."""
+    senza filtrare per le nostre squadre. Utile per verificare il collegamento."""
     if not LIVE_ENABLED:
-        return jsonify({'error':'Chiave FOOTBALL_DATA_KEY non impostata', 'competition': WC_COMPETITION_CODE})
+        return jsonify({'error':'Chiave HIGHLIGHTLY_KEY non impostata', 'leagueId': LIVE_LEAGUE_ID})
     try:
-        headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
-        url = f"{FOOTBALL_DATA_BASE}/competitions/{WC_COMPETITION_CODE}/matches"
+        headers = {'x-rapidapi-key': HIGHLIGHTLY_KEY}
+        url = f"{HIGHLIGHTLY_BASE}/matches?leagueId={LIVE_LEAGUE_ID}&season={LIVE_SEASON}&limit=100"
         req = _urlreq.Request(url, headers=headers)
         with _urlreq.urlopen(req, timeout=12) as resp:
             data = json.loads(resp.read().decode('utf-8'))
         out = []
-        for m in data.get('matches', [])[:30]:
-            sc = (m.get('score') or {}).get('fullTime') or {}
+        for m in data.get('data', [])[:40]:
+            st = m.get('state') or {}
             out.append({
                 'home': (m.get('homeTeam') or {}).get('name'),
                 'away': (m.get('awayTeam') or {}).get('name'),
-                'status': m.get('status'),
-                'score': f"{sc.get('home')}-{sc.get('away')}" if sc.get('home') is not None else '',
-                'utcDate': m.get('utcDate'),
+                'status': st.get('description'),
+                'score': (st.get('score') or {}).get('current') or '',
+                'date': m.get('date'),
+                'league': (m.get('league') or {}).get('name'),
             })
-        return jsonify({'competition': WC_COMPETITION_CODE,
-                        'count': data.get('count') or len(data.get('matches', [])),
+        return jsonify({'leagueId': LIVE_LEAGUE_ID,
+                        'count': (data.get('pagination') or {}).get('totalCount', len(data.get('data', []))),
                         'matches': out})
     except Exception as e:
-        return jsonify({'competition': WC_COMPETITION_CODE, 'error': str(e)})
+        return jsonify({'leagueId': LIVE_LEAGUE_ID, 'error': str(e)})
 
 @app.route('/api/live')
 def api_live():
@@ -883,6 +894,41 @@ def sim_demo():
     LIVE_STATE['last_poll'] = 0
     poll_live(force=True)
     return jsonify({'ok':True, 'match_id':mid})
+
+
+# ── Friendlies: scoring & leaderboard (test pre-Mondiale) ──────────────────
+FRIENDLY_IDS = {m['id'] for m in FRIENDLY_SCHEDULE}
+
+def _calc_friendly_points(email):
+    preds = PREDICTIONS.get(email, {})
+    pts=0; correct=0; exact=0
+    for mid, pred in preds.items():
+        if mid not in FRIENDLY_IDS:
+            continue
+        res = RESULTS.get(mid)
+        if not res:
+            continue
+        score_ok = bool(pred.get('score')) and pred.get('score') == res.get('score')
+        pick_ok  = pred.get('pick') == res.get('pick')
+        if score_ok:   pts+=3; exact+=1; correct+=1
+        elif pick_ok:  pts+=1; correct+=1
+    return pts, correct, exact
+
+@app.route('/api/friendly_leaderboard')
+def friendly_leaderboard():
+    board=[]
+    for email in PREDICTIONS:
+        has_fr = any(mid in FRIENDLY_IDS for mid in PREDICTIONS.get(email, {}))
+        if not has_fr:
+            continue
+        p = PROFILES.get(email, {})
+        pts, correct, exact = _calc_friendly_points(email)
+        board.append({'email':email,
+                      'nickname':p.get('nickname', email.split('@')[0]),
+                      'avatar':p.get('avatar','⚽'),
+                      'points':pts,'correct':correct,'exact':exact})
+    board.sort(key=lambda x:(-x['points'], -x['exact']))
+    return jsonify(board[:50])
 
 
 # ── Global leaderboard ─────────────────────────────────────────────────

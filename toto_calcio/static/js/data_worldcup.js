@@ -12,6 +12,7 @@ const FLAG = {
   'Argentina':'ar','Algeria':'dz','Austria':'at','Giordania':'jo',
   'Portogallo':'pt','RD Congo':'cd','Uzbekistan':'uz','Colombia':'co',
   'Inghilterra':'gb-eng','Croazia':'hr','Ghana':'gh','Panama':'pa',
+  'Islanda':'is','Venezuela':'ve','Pakistan':'pk','Afghanistan':'af','Nigeria':'ng',
 };
 
 function flagUrl(name) {

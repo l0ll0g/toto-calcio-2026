@@ -1,43 +1,30 @@
-# Risultati live automatici (football-data.org)
+# Risultati live automatici (Highlightly)
 
-L'app aggiorna da sola i risultati del Mondiale, senza inserirli a mano.
-Usa football-data.org, il cui piano GRATUITO include la FIFA World Cup.
+L'app aggiorna da sola i risultati delle partite, senza inserirli a mano.
+Fonte: Highlightly (https://highlightly.net) — piano gratuito, 100 richieste/giorno.
 
 ## 1. Ottieni la chiave gratuita
-
-1. Vai su https://www.football-data.org/client/register
-2. Registrati (gratis): ricevi una API key via email / nella dashboard.
-3. Il piano gratuito include la Coppa del Mondo FIFA, con 10 richieste al minuto.
-   I risultati possono avere un piccolo ritardo (delayed) sul piano free: per un
-   toto tra amici, dove conta il risultato finale, è più che sufficiente.
+1. Vai su https://highlightly.net/login e registrati (niente carta di credito).
+2. Nella dashboard trovi la tua API key.
 
 ## 2. Imposta la chiave su Render
-
-1. Render → tuo servizio → Environment.
-2. Aggiungi:  FOOTBALL_DATA_KEY = (la tua chiave)
-3. Salva. Al riavvio l'app passa automaticamente ai risultati reali.
-
+Render -> tuo servizio -> Environment -> aggiungi:
+   HIGHLIGHTLY_KEY = (la tua chiave)
 Senza questa variabile, l'app NON inventa risultati: le partite restano senza
-punteggio finché non imposti la chiave o finché l'admin non inserisce un
-risultato a mano (Pannello Admin → "Inserisci Risultati").
+punteggio finché non imposti la chiave (o finché l'admin non li inserisce a mano).
 
-## 3. Come funziona
+## 3. Quale competizione interrogare
+La variabile LIVE_LEAGUE_ID decide quale lega seguire:
+   - 9294  = Amichevoli internazionali (default ora, per i test)
+   - <id FIFA World Cup> = per il Mondiale (da impostare quando inizia)
+Per il Mondiale, una volta noto l'id lega su Highlightly, basta cambiare
+LIVE_LEAGUE_ID su Render (e LIVE_SEASON se serve), senza toccare il codice.
 
-- L'app interroga la competizione "WC" (FIFA World Cup) su football-data.org.
-- Aggiorna i risultati solo a partita FINITA (i punti contano a fine gara).
-- I nomi delle nazionali vengono tradotti automaticamente (italiano <-> inglese).
-- Endpoint interno: /api/live (lo usa il frontend per lo stato live).
+## 4. Come funziona
+- L'app interroga /matches?leagueId=...&season=... su Highlightly.
+- Aggiorna i risultati a partita finita (i punti contano a fine gara).
+- I nomi delle nazionali sono tradotti automaticamente (italiano <-> inglese).
+- Endpoint diagnostico admin: /api/live_raw (mostra le partite grezze ricevute).
 
-## 4. Verifica
-
-Dopo aver impostato la chiave, apri:
-   https://<tuo-sito>.onrender.com/api/live
-Controlla:
-   "enabled": true       -> la chiave è stata letta
-   "simulation": false   -> non è più in simulazione
-   "error": null         -> nessun errore di collegamento
-
-## 5. Amichevoli (nota)
-
-Il piano gratuito copre il Mondiale ma NON le amichevoli internazionali.
-Per le amichevoli, l'admin può inserire i risultati a mano dal pannello.
+## 5. Verifica
+Apri /api/live: deve mostrare "enabled": true, "simulation": false, "error": null.

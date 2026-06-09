@@ -686,7 +686,7 @@ function html_dash() {
       </button>
 
       <!-- Special predictions strip -->
-      <div class="grid sm:grid-cols-2 gap-4 mb-8">
+      <div class="mb-8">
         <!-- Topscorer -->
         <div class="glass rounded-xl p-4">
           <div class="flex items-center gap-2 mb-3">
@@ -703,21 +703,6 @@ function html_dash() {
           <button id="btn-topscorer" class="w-full py-2 rounded-lg text-xs font-bold text-gold transition-colors" style="background:rgba(200,164,74,0.1);border:1px solid rgba(200,164,74,0.2)">
             <i class="fa-solid fa-magnifying-glass mr-1"></i>${hasTopscorer?'Cambia giocatore':'Scegli giocatore'}
           </button>
-        </div>
-        <!-- Final pred (sola lettura: deriva dal Tabellone KO) -->
-        <div class="glass rounded-xl p-4">
-          <div class="flex items-center gap-2 mb-3">
-            <i class="fa-solid fa-crown text-gold text-sm"></i>
-            <span class="font-display text-base text-white tracking-wide">PRONOSTICO FINALE</span>
-            ${hasFinal?`<span class="ml-auto text-xs text-emerald-400 font-semibold"><i class="fa-solid fa-check mr-1"></i>Dal tabellone</span>`:''}
-          </div>
-          ${hasFinal ? `
-          <div class="p-2 rounded-lg mb-1" style="background:rgba(200,164,74,0.08);border:1px solid rgba(200,164,74,0.15)">
-            <div class="text-white text-xs font-semibold text-center">${S.finalPred.home} vs ${S.finalPred.away}</div>
-            ${S.finalPred.score?`<div class="text-gold text-center mt-1"><span class="font-display text-lg tracking-wider">${S.finalPred.score.replace('-',' – ')}</span></div>`:''}
-            <div class="text-gold/70 text-xs text-center mt-0.5"><i class="fa-solid fa-trophy mr-1"></i>${S.finalPred.winner}</div>
-          </div>
-          <p class="text-white/30 text-xs text-center mt-2">La finale si imposta dal Tabellone KO.</p>` : `<p class="text-white/35 text-xs mb-1">La finale deriva dal tuo <strong class="text-gold">Tabellone KO</strong>: <strong class="text-gold">3pt</strong> per le finaliste, <strong class="text-gold">5pt</strong> col risultato esatto.</p>`}
         </div>
       </div>
 

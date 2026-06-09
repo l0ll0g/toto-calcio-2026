@@ -1694,6 +1694,15 @@ function html_friendlies() {
       ? `<span class="text-xs font-bold text-white/40">FINITA</span>`
       : `<span class="text-xs text-white/30">${m.date} · ${m.time}</span>`;
     const liveScore = (info.score) ? info.score.replace('-',' – ') : null;
+    // Badge esito pronostico (come nel Mondiale): confronta pronostico e risultato reale
+    let frBadge = '';
+    if (result && (p.score || p.pick)) {
+      const scoreOk = p.score && p.score === result.score;
+      const pickOk  = p.pick && p.pick === result.pick;
+      if (scoreOk)     frBadge = `<div class="badge-exact rounded-lg px-3 py-2 mt-3 flex items-center justify-center gap-2 text-xs font-bold"><i class="fa-solid fa-star"></i> Risultato esatto! +3 punti</div>`;
+      else if (pickOk) frBadge = `<div class="badge-correct rounded-lg px-3 py-2 mt-3 flex items-center justify-center gap-2 text-xs font-bold"><i class="fa-solid fa-check"></i> Esito corretto! +1 punto</div>`;
+      else             frBadge = `<div class="badge-wrong rounded-lg px-3 py-2 mt-3 flex items-center justify-center gap-2 text-xs font-bold"><i class="fa-solid fa-xmark"></i> Pronostico errato — 0 punti</div>`;
+    }
 
     return `
     <div class="match-card glass rounded-xl p-4 mb-3" data-mid="${m.id}">
@@ -1724,7 +1733,8 @@ function html_friendlies() {
           <span class="text-white text-sm font-semibold">${m.away}</span>
         </div>
       </div>
-      ${liveScore?`<div class="text-center mt-3 pt-3" style="border-top:1px solid rgba(255,255,255,0.06)"><span class="text-white/40 text-xs">Risultato ${info.status==='FINISHED'?'finale':'live'}: </span><span class="font-display text-lg" style="color:#22c55e">${liveScore}</span></div>`:''}
+      ${liveScore?`<div class="fr-live-line text-center mt-3 pt-3" style="border-top:1px solid rgba(255,255,255,0.06)"><span class="text-white/40 text-xs">Risultato ${info.status==='FINISHED'?'finale':'live'}: </span><span class="font-display text-lg" style="color:#22c55e">${liveScore}</span></div>`:''}
+      ${frBadge}
       <div class="fr-info-line mt-2 text-center text-xs"></div>
     </div>`;
   }).join('');

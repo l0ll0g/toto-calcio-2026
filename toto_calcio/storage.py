@@ -19,33 +19,59 @@ _lock = threading.Lock()
 #  BACKEND POSTGRES (Supabase)
 # ════════════════════════════════════════════════════════════════════════
 if USE_PG:
-    import psycopg2
-    from psycopg2.pool import ThreadedConnectionPool
+    import psycopg2, time as _time
     from psycopg2.extras import RealDictCursor
 
     _dsn = DATABASE_URL
     if 'sslmode=' not in _dsn:
         _dsn += ('&' if '?' in _dsn else '?') + 'sslmode=require'
 
+    # NB: con il pooler di Supabase + hosting effimero, le connessioni inattive
+    # vengono chiuse. Per robustezza apriamo una connessione FRESCA per ogni
+    # operazione e la chiudiamo subito, con un retry se la connessione e' morta.
+    def _connect():
+        return psycopg2.connect(_dsn, connect_timeout=10)
+
+    # test di connessione all'avvio (non fatale: l'app parte comunque)
     try:
-        _pool = ThreadedConnectionPool(1, 10, _dsn)
+        _c = _connect(); _c.close()
         print('[STORAGE] Connessione PostgreSQL (Supabase) riuscita', flush=True)
     except Exception as _e:
         print(f'[STORAGE][ERRORE] Connessione PostgreSQL fallita: {_e}', flush=True)
-        raise
+
+    _STALE = (psycopg2.OperationalError, psycopg2.InterfaceError)
 
     def _pg(query, params=None, fetch=False):
-        conn = _pool.getconn()
-        try:
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(query, params or ())
-                rows = cur.fetchall() if fetch else None
-            conn.commit()
-            return rows
-        except Exception:
-            conn.rollback(); raise
-        finally:
-            _pool.putconn(conn)
+        last_err = None
+        for _attempt in range(3):
+            conn = None
+            try:
+                conn = _connect()
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(query, params or ())
+                    rows = cur.fetchall() if fetch else None
+                conn.commit()
+                return rows
+            except _STALE as e:
+                last_err = e
+                try:
+                    if conn: conn.close()
+                except Exception:
+                    pass
+                _time.sleep(0.3 * (_attempt + 1))   # piccola pausa e riprova
+                continue
+            except Exception:
+                if conn:
+                    try: conn.rollback()
+                    except Exception: pass
+                    try: conn.close()
+                    except Exception: pass
+                raise
+            finally:
+                if conn and not conn.closed:
+                    try: conn.close()
+                    except Exception: pass
+        raise last_err
 
     def _init():
         _pg("""CREATE TABLE IF NOT EXISTS kv (

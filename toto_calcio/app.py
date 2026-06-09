@@ -45,12 +45,17 @@ API_FOOTBALL_KEY = os.environ.get('API_FOOTBALL_KEY', '')
 
 # ── Live results: football-data.org ────────────────────────────────────────
 # Chiave gratuita su https://www.football-data.org/client/register
-# Incollala qui sotto (o impostala come variabile d'ambiente FOOTBALL_DATA_KEY).
-FOOTBALL_DATA_KEY  = os.environ.get('FOOTBALL_DATA_KEY', '')   # <-- INCOLLA QUI LA TUA CHIAVE
+# Il piano gratuito copre la FIFA World Cup (codice WC). Impostala come
+# variabile d'ambiente FOOTBALL_DATA_KEY su Render.
+FOOTBALL_DATA_KEY  = os.environ.get('FOOTBALL_DATA_KEY', '')
 FOOTBALL_DATA_BASE = 'https://api.football-data.org/v4'
-WC_COMPETITION_CODE = 'WC'   # codice FIFA World Cup su football-data.org
+# Competizione da interrogare. Default 'WC' (Mondiale). Per TESTARE prima del
+# Mondiale puoi impostare la variabile LIVE_COMPETITION='BSA' (campionato
+# brasiliano, in corso ora e incluso nel piano gratuito). A test finito,
+# rimettila a 'WC' (o rimuovi la variabile) per il Mondiale.
+WC_COMPETITION_CODE = os.environ.get('LIVE_COMPETITION', 'WC').strip() or 'WC'
 LIVE_POLL_SECONDS  = 60      # ogni quanto l'app interroga l'API (lato server cache)
-# Map: nome squadra nella nostra app -> nome su football-data.org
+# Map: nome squadra nella nostra app -> nome su football-data.org (inglese)
 LIVE_TEAM_ALIASES = {
     'Corea del Sud':'South Korea','Repubblica Ceca':'Czech Republic','Sudafrica':'South Africa',
     'Messico':'Mexico','Germania':'Germany','Spagna':'Spain','Francia':'France','Inghilterra':'England',
@@ -505,6 +510,10 @@ def create_league():
     email = session['email']
     if not name or not pw:
         return jsonify({'error':'Nome e password obbligatori'}), 400
+    # Il nome della lega deve essere univoco (confronto case-insensitive)
+    for lg in LEAGUES.values():
+        if lg.get('name','').strip().lower() == name.lower():
+            return jsonify({'error':'Esiste già una lega con questo nome. Scegline un altro.'}), 409
     lid = secrets.token_urlsafe(8)
     LEAGUES[lid] = {
         'id':lid, 'name':name, 'password':league_pw_hash(pw),
@@ -704,7 +713,9 @@ FRIENDLY_SCHEDULE = [
 ]
 
 def _fetch_live_real():
-    """Interroga football-data.org per le partite del Mondiale (LIVE + FINISHED)."""
+    """Interroga football-data.org per le partite del Mondiale (LIVE + FINISHED).
+    Doc: https://www.football-data.org/documentation/quickstart
+    """
     headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
     url = f"{FOOTBALL_DATA_BASE}/competitions/{WC_COMPETITION_CODE}/matches"
     req = _urlreq.Request(url, headers=headers)
@@ -713,15 +724,19 @@ def _fetch_live_real():
     lut = _build_alias_lookup()
     found = {}
     for m in data.get('matches', []):
-        h = m.get('homeTeam', {}).get('name') or ''
-        a = m.get('awayTeam', {}).get('name') or ''
+        h = (m.get('homeTeam') or {}).get('name') or ''
+        a = (m.get('awayTeam') or {}).get('name') or ''
         key = (_norm(h), _norm(a))
         match_ref = lut.get(key)
         if not match_ref:
             continue
-        score = m.get('score', {}).get('fullTime', {})
+        score = (m.get('score') or {}).get('fullTime') or {}
         sh, sa = score.get('home'), score.get('away')
-        status = m.get('status', 'SCHEDULED')
+        # Stati football-data.org: SCHEDULED, TIMED, IN_PLAY, PAUSED, FINISHED, ...
+        raw = m.get('status', 'SCHEDULED')
+        if   raw in ('IN_PLAY','PAUSED'): status = 'IN_PLAY'
+        elif raw == 'FINISHED':           status = 'FINISHED'
+        else:                             status = 'SCHEDULED'
         score_str = f"{sh}-{sa}" if sh is not None and sa is not None else ''
         found[match_ref['matchId']] = {
             'home': match_ref['home'], 'away': match_ref['away'],
@@ -741,9 +756,9 @@ def _sim_scripted(elapsed):
     else:              return '2-1', 'FINISHED', 90
 
 def _fetch_live_sim():
-    """Simulazione realistica: ogni partita rispetta il suo orario di kickoff reale
-    (SCHEDULED prima, IN_PLAY per ~110', FINISHED dopo). Se è attivo SIM_DEMO,
-    quella partita 'gioca' in 90 secondi reali per il test immediato."""
+    """Senza chiave reale NON inventiamo risultati: le amichevoli restano senza
+    punteggio (l'admin può inserirlo a mano dal pannello). L'unica eccezione è
+    SIM_DEMO, che l'admin attiva esplicitamente per vedere il meccanismo live."""
     now = datetime.now(timezone.utc)
     out = {}
     for fr in FRIENDLY_SCHEDULE:
@@ -754,7 +769,7 @@ def _fetch_live_sim():
             try: ko_dt = datetime.fromisoformat(ko.replace('Z','+00:00'))
             except Exception: ko_dt = None
 
-        # Demo override per il test
+        # Demo override: SOLO se l'admin l'ha avviata di proposito
         if SIM_DEMO['match_id'] == mid and SIM_DEMO['start'] is not None:
             el = _time.time() - SIM_DEMO['start']
             sc, stt, mn = _sim_scripted(el)
@@ -765,13 +780,14 @@ def _fetch_live_sim():
             continue
         mins = (now - ko_dt).total_seconds() / 60.0
         if mins < 0:
+            # non ancora iniziata
             out[mid] = {'home':fr['home'],'away':fr['away'],'score':'','status':'SCHEDULED','minute':None}
         elif mins < 110:
-            # punteggio demo deterministico durante la diretta
-            sc = '0-0' if mins < 25 else '1-0' if mins < 55 else '1-1' if mins < 80 else '2-1'
-            out[mid] = {'home':fr['home'],'away':fr['away'],'score':sc,'status':'IN_PLAY','minute':int(min(90,mins))}
+            # in corso: nessun punteggio finto, solo stato "in gioco"
+            out[mid] = {'home':fr['home'],'away':fr['away'],'score':'','status':'IN_PLAY','minute':int(min(90,mins))}
         else:
-            out[mid] = {'home':fr['home'],'away':fr['away'],'score':'2-1','status':'FINISHED','minute':90}
+            # finita: nessun risultato inventato. Resta da inserire a mano.
+            out[mid] = {'home':fr['home'],'away':fr['away'],'score':'','status':'FINISHED','minute':90}
     return out
 
 def poll_live(force=False):
@@ -799,6 +815,37 @@ def poll_live(force=False):
     except Exception as e:
         LIVE_STATE['error'] = str(e)
     return LIVE_STATE
+
+@app.route('/api/live_raw')
+@login_required
+@admin_required
+def api_live_raw():
+    """[Diagnostica admin] mostra le partite GREZZE ricevute dalla fonte live,
+    senza filtrare per le nostre squadre. Utile per testare il collegamento con
+    una competizione qualsiasi (es. LIVE_COMPETITION=BSA) prima del Mondiale."""
+    if not LIVE_ENABLED:
+        return jsonify({'error':'Chiave FOOTBALL_DATA_KEY non impostata', 'competition': WC_COMPETITION_CODE})
+    try:
+        headers = {'X-Auth-Token': FOOTBALL_DATA_KEY}
+        url = f"{FOOTBALL_DATA_BASE}/competitions/{WC_COMPETITION_CODE}/matches"
+        req = _urlreq.Request(url, headers=headers)
+        with _urlreq.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        out = []
+        for m in data.get('matches', [])[:30]:
+            sc = (m.get('score') or {}).get('fullTime') or {}
+            out.append({
+                'home': (m.get('homeTeam') or {}).get('name'),
+                'away': (m.get('awayTeam') or {}).get('name'),
+                'status': m.get('status'),
+                'score': f"{sc.get('home')}-{sc.get('away')}" if sc.get('home') is not None else '',
+                'utcDate': m.get('utcDate'),
+            })
+        return jsonify({'competition': WC_COMPETITION_CODE,
+                        'count': data.get('count') or len(data.get('matches', [])),
+                        'matches': out})
+    except Exception as e:
+        return jsonify({'competition': WC_COMPETITION_CODE, 'error': str(e)})
 
 @app.route('/api/live')
 def api_live():
@@ -837,41 +884,6 @@ def sim_demo():
     poll_live(force=True)
     return jsonify({'ok':True, 'match_id':mid})
 
-
-# ── Friendlies-only scoring & leaderboard (pre-World-Cup test) ─────────────
-FRIENDLY_IDS = {f'fr-{i:02d}' for i in range(1, 12)}
-
-def _calc_friendly_points(email):
-    preds = PREDICTIONS.get(email, {})
-    pts=0; correct=0; exact=0
-    for mid, pred in preds.items():
-        if mid not in FRIENDLY_IDS:
-            continue
-        res = RESULTS.get(mid)
-        if not res:
-            continue
-        score_ok = bool(pred.get('score')) and pred.get('score') == res.get('score')
-        pick_ok  = pred.get('pick') == res.get('pick')
-        if score_ok:   pts+=3; exact+=1; correct+=1
-        elif pick_ok:  pts+=1; correct+=1
-    return pts, correct, exact
-
-@app.route('/api/friendly_leaderboard')
-def friendly_leaderboard():
-    board=[]
-    for email in PREDICTIONS:
-        p = PROFILES.get(email, {})
-        pts, correct, exact = _calc_friendly_points(email)
-        # only show users who predicted at least one friendly
-        has_fr = any(mid in FRIENDLY_IDS for mid in PREDICTIONS.get(email, {}))
-        if not has_fr:
-            continue
-        board.append({'email':email,
-                      'nickname':p.get('nickname', email.split('@')[0]),
-                      'avatar':p.get('avatar','⚽'),
-                      'points':pts,'correct':correct,'exact':exact})
-    board.sort(key=lambda x:(-x['points'], -x['exact']))
-    return jsonify(board[:50])
 
 # ── Global leaderboard ─────────────────────────────────────────────────
 @app.route('/api/leaderboard')

@@ -869,19 +869,6 @@ def api_live():
         'poll_seconds': LIVE_POLL_SECONDS,
     })
 
-@app.route('/api/admin/clear_friendly_results', methods=['POST'])
-@login_required
-@admin_required
-def clear_friendly_results():
-    """Cancella i risultati salvati per le amichevoli (utile per ripulire i
-    falsi risultati della vecchia simulazione)."""
-    removed = []
-    for mid in list(RESULTS.keys()):
-        if mid in FRIENDLY_IDS:
-            RESULTS.pop(mid)
-            removed.append(mid)
-    return jsonify({'ok': True, 'removed': removed, 'count': len(removed)})
-
 @app.route('/api/sim_demo', methods=['POST'])
 @login_required
 @admin_required
@@ -897,41 +884,6 @@ def sim_demo():
     poll_live(force=True)
     return jsonify({'ok':True, 'match_id':mid})
 
-
-# ── Friendlies-only scoring & leaderboard (pre-World-Cup test) ─────────────
-FRIENDLY_IDS = {f'fr-{i:02d}' for i in range(1, 12)}
-
-def _calc_friendly_points(email):
-    preds = PREDICTIONS.get(email, {})
-    pts=0; correct=0; exact=0
-    for mid, pred in preds.items():
-        if mid not in FRIENDLY_IDS:
-            continue
-        res = RESULTS.get(mid)
-        if not res:
-            continue
-        score_ok = bool(pred.get('score')) and pred.get('score') == res.get('score')
-        pick_ok  = pred.get('pick') == res.get('pick')
-        if score_ok:   pts+=3; exact+=1; correct+=1
-        elif pick_ok:  pts+=1; correct+=1
-    return pts, correct, exact
-
-@app.route('/api/friendly_leaderboard')
-def friendly_leaderboard():
-    board=[]
-    for email in PREDICTIONS:
-        p = PROFILES.get(email, {})
-        pts, correct, exact = _calc_friendly_points(email)
-        # only show users who predicted at least one friendly
-        has_fr = any(mid in FRIENDLY_IDS for mid in PREDICTIONS.get(email, {}))
-        if not has_fr:
-            continue
-        board.append({'email':email,
-                      'nickname':p.get('nickname', email.split('@')[0]),
-                      'avatar':p.get('avatar','⚽'),
-                      'points':pts,'correct':correct,'exact':exact})
-    board.sort(key=lambda x:(-x['points'], -x['exact']))
-    return jsonify(board[:50])
 
 # ── Global leaderboard ─────────────────────────────────────────────────
 @app.route('/api/leaderboard')

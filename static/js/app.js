@@ -4,7 +4,7 @@
 let S = {
   view: 'login',  // login | leagues | dashboard | worldcup | profile | leagueDetail
   email:null, nickname:null, avatar:'⚽', isAdmin:false, createdAt:'—',
-  predictions:{}, submitted:[], results:{}, leaderboard:[],
+  predictions:{}, submitted:[], results:{}, leaderboard:[], liveState:{},
   deadlineSecs:null, deadlinePassed:false,
   wcTab:'groups', wcGroup:'A', wcKoRound:0,
   selAvatar:'⚽', authMode:'login', authSubMode:'login', // authSubMode: login|register|forgot|reset
@@ -147,6 +147,7 @@ function render() {
     case 'leagueDetail': root.innerHTML=html_leagueDetail();bind_leagueDetail(); break;
     case 'admin':        root.innerHTML=html_admin();       bind_admin();        break;
     case 'teams':        root.innerHTML=html_teams();       bind_teams();        break;
+    case 'friendlies':   root.innerHTML=html_friendlies();  bind_friendlies();   break;
   }
 }
 
@@ -188,7 +189,7 @@ function bind_topbar_events() {
   document.getElementById('btn-back')?.addEventListener('click', () => {
     // Teams detail → teams list; teams list → dashboard
     if (S.view === 'teams' && S.teamsTeam) { S.teamsTeam = null; render(); return; }
-    if (S.view==='worldcup'||S.view==='leagueDetail'||S.view==='teams'||S.view==='admin') nav('dashboard');
+    if (S.view==='worldcup'||S.view==='leagueDetail'||S.view==='teams'||S.view==='admin'||S.view==='friendlies') nav('dashboard');
     else if (S.view==='profile') nav(S._prevView||'dashboard');
     else nav('dashboard');
   });
@@ -685,6 +686,18 @@ function html_dash() {
         <i class="fa-solid fa-arrow-right text-gold/50 text-sm flex-shrink-0"></i>
       </button>
 
+      <!-- Amichevoli pre-Mondiale (test live) -->
+      <button id="btn-friendlies" class="w-full glass rounded-2xl p-4 mb-5 flex items-center gap-4 hover:border-emerald-400/30 transition-all text-left" style="border-color:rgba(34,197,94,0.18)">
+        <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0" style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.25)">
+          <i class="fa-solid fa-futbol text-emerald-400 text-xl"></i>
+        </div>
+        <div class="flex-1">
+          <div class="font-display text-lg text-white tracking-wide">AMICHEVOLI <span class="text-emerald-400 text-xs align-middle ml-1" style="background:rgba(34,197,94,0.15);padding:2px 6px;border-radius:6px">LIVE</span></div>
+          <div class="text-white/35 text-xs">Pronostica le amichevoli e verifica la classifica con i risultati reali</div>
+        </div>
+        <i class="fa-solid fa-arrow-right text-emerald-400/50 text-sm flex-shrink-0"></i>
+      </button>
+
       <!-- Special predictions strip -->
       <div class="mb-8">
         <!-- Topscorer -->
@@ -768,6 +781,7 @@ function bind_dash() {
   if (S._flash) { const msg = S._flash; S._flash = null; showToast(msg); }
   document.getElementById('btn-wc')?.addEventListener('click', () => nav('worldcup'));
   document.getElementById('btn-teams')?.addEventListener('click', () => { S.teamsGroup='A'; S.teamsTeam=null; nav('teams'); });
+  document.getElementById('btn-friendlies')?.addEventListener('click', () => nav('friendlies'));
   document.getElementById('btn-admin-panel')?.addEventListener('click', () => { S._prevView='dashboard'; nav('admin'); });
   document.getElementById('btn-manage-leagues')?.addEventListener('click', () => nav('leagues'));
   document.querySelectorAll('.lb-click').forEach(el => {
@@ -1657,6 +1671,207 @@ function bindPredEvents() {
 }
 
 // ── Toast notification ────────────────────────────────────
+
+// ═══════════════════════════════════════════════════════
+// AMICHEVOLI PRE-MONDIALE (test live)
+// ═══════════════════════════════════════════════════════
+function friendlyFlagImg(name, h=22){ return flagImg(name, h); }
+
+function html_friendlies() {
+  const matches = (typeof FRIENDLY_MATCHES!=='undefined') ? FRIENDLY_MATCHES : [];
+  const live = S.liveState || {};
+  const liveMatches = live.matches || {};
+  const locked = live.locked || {};
+
+  const rows = matches.map(m => {
+    const p = S.predictions[m.id] || {};
+    const info = liveMatches[m.id] || {};
+    const isLocked = locked[m.id];
+    const result = S.results[m.id];
+    const statusBadge = info.status==='IN_PLAY'
+      ? `<span class="text-xs font-bold" style="color:#22c55e">● LIVE ${info.minute?info.minute+"'":''}</span>`
+      : info.status==='FINISHED'
+      ? `<span class="text-xs font-bold text-white/40">FINITA</span>`
+      : `<span class="text-xs text-white/30">${m.date} · ${m.time}</span>`;
+    const liveScore = (info.score) ? info.score.replace('-',' – ') : null;
+
+    return `
+    <div class="match-card glass rounded-xl p-4 mb-3" data-mid="${m.id}">
+      <div class="flex items-center justify-between mb-3">
+        ${statusBadge}
+        ${isLocked?'<span class="text-xs text-white/30"><i class="fa-solid fa-lock mr-1"></i>Pronostico chiuso</span>':'<span class="text-xs" style="color:rgba(34,197,94,0.7)">Pronostica</span>'}
+      </div>
+      <div class="flex items-center justify-center gap-3">
+        <div class="flex items-center gap-2 flex-1 justify-end">
+          <span class="text-white text-sm font-semibold text-right">${m.home}</span>
+          ${friendlyFlagImg(m.home,22)}
+        </div>
+        ${isLocked ? `
+          <div class="flex items-center gap-2 px-2">
+            <span class="font-display text-2xl text-gold">${(p.score||'–-–').split('-')[0]||'–'}</span>
+            <span class="text-white/20">:</span>
+            <span class="font-display text-2xl text-gold">${(p.score||'–-–').split('-')[1]||'–'}</span>
+          </div>` : `
+          <div class="flex items-center gap-2 px-2">
+            <input class="fr-score-h" data-mid="${m.id}" type="text" inputmode="numeric" maxlength="1" value="${(p.score||'').split('-')[0]||''}" placeholder="0"
+              style="width:46px;height:46px;font-size:1.4rem;font-family:'Bebas Neue',cursive;text-align:center;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid rgba(255,255,255,0.1);color:#C8A44A;outline:none">
+            <span class="text-white/20">:</span>
+            <input class="fr-score-a" data-mid="${m.id}" type="text" inputmode="numeric" maxlength="1" value="${(p.score||'').split('-')[1]||''}" placeholder="0"
+              style="width:46px;height:46px;font-size:1.4rem;font-family:'Bebas Neue',cursive;text-align:center;border-radius:10px;background:rgba(255,255,255,0.06);border:2px solid rgba(255,255,255,0.1);color:#C8A44A;outline:none">
+          </div>`}
+        <div class="flex items-center gap-2 flex-1">
+          ${friendlyFlagImg(m.away,22)}
+          <span class="text-white text-sm font-semibold">${m.away}</span>
+        </div>
+      </div>
+      ${liveScore?`<div class="text-center mt-3 pt-3" style="border-top:1px solid rgba(255,255,255,0.06)"><span class="text-white/40 text-xs">Risultato ${info.status==='FINISHED'?'finale':'live'}: </span><span class="font-display text-lg" style="color:#22c55e">${liveScore}</span></div>`:''}
+      <div class="fr-info-line mt-2 text-center text-xs"></div>
+    </div>`;
+  }).join('');
+
+  return `
+  ${html_topbar({back:true, title:'Amichevoli', subtitle:'Test live · pronostici e classifica'})}
+  <main class="px-4 py-6 max-w-2xl mx-auto">
+    <div class="glass rounded-2xl p-4 mb-5" style="border-color:rgba(34,197,94,0.18)">
+      <div class="flex items-center gap-2 text-sm text-white/60">
+        <i class="fa-solid fa-circle-info" style="color:#22c55e"></i>
+        <span>Pronostica il risultato esatto: <strong class="text-gold">+3pt</strong> se indovini il punteggio, <strong class="text-gold">+1pt</strong> solo l'esito. I risultati arrivano in automatico.</span>
+      </div>
+    </div>
+    ${rows || '<p class="text-white/40 text-center py-8">Nessuna amichevole disponibile.</p>'}
+
+    <!-- Classifica amichevoli -->
+    <div class="glass rounded-2xl p-5 mt-6">
+      <div class="font-display text-lg text-white tracking-wide mb-4"><i class="fa-solid fa-ranking-star text-gold mr-2"></i>CLASSIFICA AMICHEVOLI</div>
+      <div id="fr-leaderboard"><p class="text-white/30 text-sm">Caricamento…</p></div>
+    </div>
+  </main>`;
+}
+
+function bind_friendlies() {
+  bind_topbar_events();
+
+  // Salvataggio pronostico (su input dei due score)
+  const saveFr = async (mid) => {
+    const card = document.querySelector(`.match-card[data-mid="${mid}"]`);
+    if (!card) return;
+    const hI = card.querySelector('.fr-score-h');
+    const aI = card.querySelector('.fr-score-a');
+    if (!hI || !aI) return;
+    const h = hI.value.trim(), a = aI.value.trim();
+    if (h==='' || a==='') return;
+    const score = `${h}-${a}`;
+    const pick = (+h > +a) ? '1' : (+a > +h) ? '2' : 'X';
+    const info = card.querySelector('.fr-info-line');
+    if (info) info.innerHTML = `<i class="fa-solid fa-spinner spinner mr-1" style="color:rgba(255,255,255,0.25)"></i><span style="color:rgba(255,255,255,0.25)">Salvataggio…</span>`;
+    try {
+      const res = await api('/api/predictions', {method:'POST', body:{matchId:mid, pick, score}});
+      if (res.ok) {
+        S.predictions = res.predictions;
+        [hI,aI].forEach(el=>{ el.style.borderColor='rgba(200,164,74,0.6)'; el.style.color='#C8A44A'; el.style.background='rgba(200,164,74,0.06)'; });
+        if (info) info.innerHTML = `<i class="fa-solid fa-check mr-1" style="color:#22c55e"></i><span style="color:#22c55e">Salvato</span>`;
+      } else if (info) {
+        info.innerHTML = `<span style="color:#fca5a5">${res.error||'Errore'}</span>`;
+      }
+    } catch(e) {
+      if (info) info.innerHTML = `<span style="color:#fca5a5">Errore di rete</span>`;
+    }
+  };
+
+  let frTimer = null;
+  document.querySelectorAll('.fr-score-h, .fr-score-a').forEach(inp => {
+    inp.addEventListener('input', (e) => {
+      e.target.value = e.target.value.replace(/[^0-9]/g,'').slice(0,1);
+      const mid = e.target.dataset.mid;
+      clearTimeout(frTimer);
+      frTimer = setTimeout(()=>saveFr(mid), 600);
+    });
+  });
+
+  // Carica la classifica amichevoli
+  refreshFriendlyBoard();
+
+  // Avvia il polling live per vedere i risultati aggiornarsi
+  startFriendlyLivePolling();
+}
+
+async function refreshFriendlyBoard() {
+  const el = document.getElementById('fr-leaderboard');
+  if (!el) return;
+  try {
+    const board = await api('/api/friendly_leaderboard');
+    if (!board || !board.length) {
+      el.innerHTML = '<p class="text-white/30 text-sm">Ancora nessun punteggio. I punti compaiono quando le partite finiscono.</p>';
+      return;
+    }
+    el.innerHTML = board.map((r,i)=>`
+      <div class="flex items-center gap-3 py-2 ${i<board.length-1?'border-b border-white/5':''}">
+        <span class="font-display text-lg ${i===0?'text-gold':'text-white/40'}" style="width:24px">${i+1}</span>
+        <span class="text-xl">${r.avatar||'⚽'}</span>
+        <span class="text-white text-sm flex-1">${r.nickname}</span>
+        <span class="text-white/40 text-xs mr-3">✓${r.correct} ★${r.exact}</span>
+        <span class="font-display text-lg text-gold">${r.points}<span class="text-xs text-white/40 ml-1">pt</span></span>
+      </div>`).join('');
+  } catch(e) {
+    el.innerHTML = '<p class="text-white/30 text-sm">Impossibile caricare la classifica.</p>';
+  }
+}
+
+async function pollFriendlyLive() {
+  try {
+    const live = await api('/api/live');
+    S.liveState = live;
+    // se ci sono risultati nuovi, ricarica i dati utente (RESULTS) e ridisegna
+    const r = await api('/api/results');
+    S.results = r || {};
+    if (S.view === 'friendlies') {
+      // ridisegna solo se siamo ancora nella pagina
+      const root = document.getElementById('app');
+      root.innerHTML = html_friendlies();
+      bind_friendlies();
+    }
+  } catch(e) { /* silenzioso */ }
+}
+
+function startFriendlyLivePolling() {
+  if (S._frLiveTimer) clearInterval(S._frLiveTimer);
+  // primo fetch immediato (per stato + eventuali risultati), poi ogni 30s
+  pollFriendlyLiveLight();
+  S._frLiveTimer = setInterval(()=>{
+    if (S.view!=='friendlies'){ clearInterval(S._frLiveTimer); S._frLiveTimer=null; return; }
+    pollFriendlyLiveLight();
+  }, 30000);
+}
+
+// Versione "leggera": aggiorna stato e classifica senza ridisegnare tutto
+// (per non cancellare ciò che l'utente sta digitando).
+async function pollFriendlyLiveLight() {
+  try {
+    const live = await api('/api/live');
+    S.liveState = live;
+    const r = await api('/api/results');
+    S.results = r || {};
+    // aggiorna i badge live/risultati di ogni card senza toccare gli input
+    (FRIENDLY_MATCHES||[]).forEach(m=>{
+      const info = (live.matches||{})[m.id] || {};
+      const card = document.querySelector(`.match-card[data-mid="${m.id}"]`);
+      if (!card) return;
+      // aggiorna riga risultato live
+      let line = card.querySelector('.fr-live-line');
+      if (info.score) {
+        const txt = `<span class="text-white/40 text-xs">Risultato ${info.status==='FINISHED'?'finale':'live'}: </span><span class="font-display text-lg" style="color:#22c55e">${info.score.replace('-',' – ')}</span>`;
+        if (!line) {
+          line = document.createElement('div');
+          line.className = 'fr-live-line text-center mt-3 pt-3';
+          line.style.borderTop = '1px solid rgba(255,255,255,0.06)';
+          card.appendChild(line);
+        }
+        line.innerHTML = txt;
+      }
+    });
+    refreshFriendlyBoard();
+  } catch(e) { /* silenzioso */ }
+}
 
 function showToast(msg, type='success') {
   const existing = document.getElementById('app-toast');

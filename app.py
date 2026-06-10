@@ -50,6 +50,15 @@ API_FOOTBALL_KEY = os.environ.get('API_FOOTBALL_KEY', '')
 HIGHLIGHTLY_KEY  = os.environ.get('HIGHLIGHTLY_KEY', '')
 HIGHLIGHTLY_BASE = 'https://soccer.highlightly.net'
 HIGHLIGHTLY_HOST = os.environ.get('HIGHLIGHTLY_HOST', 'soccer.highlightly.net').strip() or 'soccer.highlightly.net'
+# Cloudflare (davanti a Highlightly) blocca le richieste "da bot" con error 1010.
+# Aggiungendo uno User-Agent da browser le richieste passano (verificato da Render).
+def _hl_headers():
+    return {
+        'x-rapidapi-key': HIGHLIGHTLY_KEY,
+        'x-rapidapi-host': HIGHLIGHTLY_HOST,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        'Accept': 'application/json',
+    }
 # Quale lega interrogare:
 #  - "9294"  = Amichevoli internazionali (per i test prima del Mondiale)
 #  - id lega FIFA World Cup = per il Mondiale (da impostare quando disponibile)
@@ -729,7 +738,7 @@ def _fetch_live_real():
     Doc: https://highlightly.net/football-api/documentation/
     Risposta: data[] con homeTeam.name, awayTeam.name, state.description, state.score.current ("2 - 1").
     """
-    headers = {'x-rapidapi-key': HIGHLIGHTLY_KEY, 'x-rapidapi-host': HIGHLIGHTLY_HOST}
+    headers = _hl_headers()
     url = f"{HIGHLIGHTLY_BASE}/matches?leagueId={LIVE_LEAGUE_ID}&season={LIVE_SEASON}&limit=100"
     req = _urlreq.Request(url, headers=headers)
     with _urlreq.urlopen(req, timeout=12) as resp:
@@ -838,7 +847,7 @@ def api_live_raw():
     if not LIVE_ENABLED:
         return jsonify({'error':'Chiave HIGHLIGHTLY_KEY non impostata', 'leagueId': LIVE_LEAGUE_ID})
     try:
-        headers = {'x-rapidapi-key': HIGHLIGHTLY_KEY, 'x-rapidapi-host': HIGHLIGHTLY_HOST}
+        headers = _hl_headers()
         url = f"{HIGHLIGHTLY_BASE}/matches?leagueId={LIVE_LEAGUE_ID}&season={LIVE_SEASON}&limit=100"
         req = _urlreq.Request(url, headers=headers)
         with _urlreq.urlopen(req, timeout=12) as resp:

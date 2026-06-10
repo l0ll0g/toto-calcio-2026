@@ -699,21 +699,19 @@ def _alias(name):
     return LIVE_TEAM_ALIASES.get(name, name)
 
 def _build_alias_lookup():
-    """Mappa nome-API (lower) -> nostro matchId, per ogni partita conosciuta.
-    Aggiunge anche la chiave invertita (away, home) perché alcune fonti (es.
-    Highlightly) possono catalogare casa/trasferta al contrario."""
+    """Mappa l'insieme {squadra1, squadra2} -> nostra partita, così riconosciamo
+    la partita indipendentemente da quale squadra la fonte mette in casa.
+    Conserva anche il nome normalizzato della NOSTRA squadra di casa, per
+    orientare correttamente il punteggio."""
     lut = {}
     def add(mid, home, away):
-        key = (_norm(_alias(home)), _norm(_alias(away)))
-        lut[key] = {'matchId': mid, 'home': home, 'away': away, 'reversed': False}
-        # chiave invertita: stessa partita ma con casa/trasferta scambiate sulla fonte
-        rkey = (_norm(_alias(away)), _norm(_alias(home)))
-        if rkey not in lut:
-            lut[rkey] = {'matchId': mid, 'home': home, 'away': away, 'reversed': True}
+        nh, na = _norm(_alias(home)), _norm(_alias(away))
+        key = frozenset((nh, na))
+        lut[key] = {'matchId': mid, 'home': home, 'away': away,
+                    'home_norm': nh, 'away_norm': na}
     for grp in WC_MATCH_SCHEDULE.values():
         for m in grp:
             add(m['id'], m['home'], m['away'])
-    # amichevoli, se presenti
     for m in FRIENDLY_SCHEDULE:
         add(m['id'], m['home'], m['away'])
     return lut
@@ -756,7 +754,8 @@ def _fetch_live_real():
         for m in data.get('data', []):
             h = (m.get('homeTeam') or {}).get('name') or ''
             a = (m.get('awayTeam') or {}).get('name') or ''
-            match_ref = lut.get((_norm(h), _norm(a)))
+            nh, na = _norm(h), _norm(a)
+            match_ref = lut.get(frozenset((nh, na)))
             if not match_ref:
                 continue
             st = m.get('state') or {}
@@ -766,11 +765,14 @@ def _fetch_live_real():
             if cur and '-' in cur:
                 parts = [p.strip() for p in cur.split('-')]
                 if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                    # se la fonte ha casa/trasferta invertite rispetto a noi, scambiamo
-                    if match_ref.get('reversed'):
-                        score_str = f"{parts[1]}-{parts[0]}"
+                    api_home_goals, api_away_goals = parts[0], parts[1]
+                    # Orienta il punteggio in base alla NOSTRA squadra di casa:
+                    # se la casa secondo la fonte è la nostra casa, ordine invariato;
+                    # altrimenti la fonte ha invertito e scambiamo.
+                    if nh == match_ref['home_norm']:
+                        score_str = f"{api_home_goals}-{api_away_goals}"
                     else:
-                        score_str = f"{parts[0]}-{parts[1]}"
+                        score_str = f"{api_away_goals}-{api_home_goals}"
             found[match_ref['matchId']] = {
                 'home': match_ref['home'], 'away': match_ref['away'],
                 'score': score_str, 'status': status, 'minute': st.get('clock'),

@@ -25,6 +25,16 @@ function fifaRank(team){ return FIFA_RANK[team] != null ? FIFA_RANK[team] : 99; 
 // ── Compute one group's standing table from the user's predicted scores ──────
 // predictions: { 'wc-A-m1': {pick, score}, ... }
 // Returns array of {team, P, W, D, L, GF, GA, GD, pts, rank} sorted 1→4.
+//
+// Ordinamento secondo il REGOLAMENTO UFFICIALE FIFA 2026 (gerarchico):
+//   1) Punti totali
+//   2) Punti negli scontri diretti (tra le squadre a pari punti)
+//   3) Differenza reti negli scontri diretti
+//   4) Gol segnati negli scontri diretti
+//   5) Differenza reti totale
+//   6) Gol segnati totali
+//   7) Ranking FIFA (ultima spiaggia)
+// Gli scontri diretti vengono PRIMA dei criteri globali (novità 2026).
 function computeGroupStanding(groupLetter, predictions) {
   const teams = WC_GROUPS[groupLetter].map(t => t.name);
   const row = {};
@@ -33,6 +43,8 @@ function computeGroupStanding(groupLetter, predictions) {
   const matches = WC_ALL_MATCHES.filter(m => m.group === groupLetter);
   let complete = true;
 
+  // Salviamo i risultati validi per poter calcolare gli scontri diretti
+  const played = [];  // {hT, aT, h, a}
   for (const m of matches) {
     const pred = predictions[m.id];
     if (!pred || !pred.score || !pred.score.includes('-')) { complete = false; continue; }
@@ -46,17 +58,53 @@ function computeGroupStanding(groupLetter, predictions) {
     if (h > a)      { row[hT].W++; row[aT].L++; row[hT].pts += 3; }
     else if (a > h) { row[aT].W++; row[hT].L++; row[aT].pts += 3; }
     else            { row[hT].D++; row[aT].D++; row[hT].pts += 1; row[aT].pts += 1; }
+    played.push({hT, aT, h, a});
   }
 
   teams.forEach(t => { row[t].GD = row[t].GF - row[t].GA; });
 
-  // Sort: pts → GD → GF → FIFA rank (final tie-break, lower = better)
-  const standing = teams.map(t => row[t]).sort((x, y) => {
+  // Calcola la "classifica avulsa" (mini-tabella) tra un dato insieme di squadre,
+  // considerando SOLO le partite giocate tra quelle squadre.
+  function headToHead(group) {
+    const g = {};
+    group.forEach(t => { g[t] = {pts:0, gf:0, ga:0}; });
+    for (const p of played) {
+      if (g[p.hT] && g[p.aT]) {   // entrambe nel sottogruppo
+        g[p.hT].gf += p.h; g[p.hT].ga += p.a;
+        g[p.aT].gf += p.a; g[p.aT].ga += p.h;
+        if (p.h > p.a)      g[p.hT].pts += 3;
+        else if (p.a > p.h) g[p.aT].pts += 3;
+        else { g[p.hT].pts += 1; g[p.aT].pts += 1; }
+      }
+    }
+    Object.keys(g).forEach(t => { g[t].gd = g[t].gf - g[t].ga; });
+    return g;
+  }
+
+  // Comparatore gerarchico FIFA 2026
+  function compare(x, y) {
+    // 1) Punti totali
     if (y.pts !== x.pts) return y.pts - x.pts;
-    if (y.GD  !== x.GD)  return y.GD  - x.GD;
-    if (y.GF  !== x.GF)  return y.GF  - x.GF;
+    // 2-4) Scontri diretti tra TUTTE le squadre attualmente a pari punti con x e y
+    const tiedTeams = teams.filter(t => row[t].pts === x.pts);
+    if (tiedTeams.length >= 2) {
+      const h2h = headToHead(tiedTeams);
+      const hx = h2h[x.team], hy = h2h[y.team];
+      if (hx && hy) {
+        if (hy.pts !== hx.pts) return hy.pts - hx.pts;   // 2) punti scontri diretti
+        if (hy.gd  !== hx.gd)  return hy.gd  - hx.gd;     // 3) diff. reti scontri diretti
+        if (hy.gf  !== hx.gf)  return hy.gf  - hx.gf;     // 4) gol fatti scontri diretti
+      }
+    }
+    // 5) Differenza reti totale
+    if (y.GD !== x.GD) return y.GD - x.GD;
+    // 6) Gol fatti totali
+    if (y.GF !== x.GF) return y.GF - x.GF;
+    // 7) Ranking FIFA (ultima spiaggia)
     return fifaRank(x.team) - fifaRank(y.team);
-  });
+  }
+
+  const standing = teams.map(t => row[t]).sort(compare);
   standing.forEach((r, i) => { r.rank = i + 1; });
   standing._complete = complete;
   return standing;

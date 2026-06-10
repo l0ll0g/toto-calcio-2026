@@ -65,7 +65,7 @@ def _hl_headers():
 # Configurabile via env LIVE_LEAGUE_ID. Default amichevoli per ora.
 LIVE_LEAGUE_ID   = os.environ.get('LIVE_LEAGUE_ID', '9294').strip() or '9294'
 LIVE_SEASON      = os.environ.get('LIVE_SEASON', '2026').strip() or '2026'
-LIVE_POLL_SECONDS = 60       # ogni quanto l'app interroga l'API (cache lato server)
+LIVE_POLL_SECONDS = int(os.environ.get('LIVE_POLL_SECONDS', '120'))  # cache lato server (default 2 min, protegge il limite 100 richieste/giorno)
 # (compat: vecchie variabili, non più usate dal motore ma non rompono nulla)
 FOOTBALL_DATA_KEY = os.environ.get('FOOTBALL_DATA_KEY', '')
 # Map: nome squadra nella nostra app -> nome su Highlightly (inglese)
@@ -734,36 +734,59 @@ def _hl_status(desc):
     return 'SCHEDULED'
 
 def _fetch_live_real():
-    """Interroga Highlightly per le partite della lega configurata (LIVE_LEAGUE_ID).
+    """Interroga Highlightly. Per le amichevoli (lega con centinaia di partite nel
+    mondo) cerchiamo PER DATA, così becchiamo le nostre partite a prescindere
+    dall'ordine. Per il Mondiale (poche partite) si usa leagueId via env.
     Doc: https://highlightly.net/football-api/documentation/
-    Risposta: data[] con homeTeam.name, awayTeam.name, state.description, state.score.current ("2 - 1").
     """
     headers = _hl_headers()
-    url = f"{HIGHLIGHTLY_BASE}/matches?leagueId={LIVE_LEAGUE_ID}&season={LIVE_SEASON}&limit=100"
-    req = _urlreq.Request(url, headers=headers)
-    with _urlreq.urlopen(req, timeout=12) as resp:
-        data = json.loads(resp.read().decode('utf-8'))
-    lut = _build_alias_lookup()
     found = {}
-    for m in data.get('data', []):
-        h = (m.get('homeTeam') or {}).get('name') or ''
-        a = (m.get('awayTeam') or {}).get('name') or ''
-        key = (_norm(h), _norm(a))
-        match_ref = lut.get(key)
-        if not match_ref:
-            continue
-        st = m.get('state') or {}
-        status = _hl_status(st.get('description'))
-        cur = (st.get('score') or {}).get('current')   # es. "2 - 1" oppure None
-        score_str = ''
-        if cur and '-' in cur:
-            parts = [p.strip() for p in cur.split('-')]
-            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                score_str = f"{parts[0]}-{parts[1]}"
-        found[match_ref['matchId']] = {
-            'home': match_ref['home'], 'away': match_ref['away'],
-            'score': score_str, 'status': status, 'minute': st.get('clock'),
-        }
+
+    # Modalità: se LIVE_BY_DATE attiva (default per le amichevoli), cerca per data.
+    use_dates = os.environ.get('LIVE_BY_DATE', '1').strip() not in ('0', '', 'false', 'False')
+
+    def _ingest(data):
+        lut = _build_alias_lookup()
+        for m in data.get('data', []):
+            h = (m.get('homeTeam') or {}).get('name') or ''
+            a = (m.get('awayTeam') or {}).get('name') or ''
+            match_ref = lut.get((_norm(h), _norm(a)))
+            if not match_ref:
+                continue
+            st = m.get('state') or {}
+            status = _hl_status(st.get('description'))
+            cur = (st.get('score') or {}).get('current')
+            score_str = ''
+            if cur and '-' in cur:
+                parts = [p.strip() for p in cur.split('-')]
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    score_str = f"{parts[0]}-{parts[1]}"
+            found[match_ref['matchId']] = {
+                'home': match_ref['home'], 'away': match_ref['away'],
+                'score': score_str, 'status': status, 'minute': st.get('clock'),
+            }
+
+    def _get(url):
+        req = _urlreq.Request(url, headers=headers)
+        with _urlreq.urlopen(req, timeout=12) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+
+    if use_dates:
+        # Date UTC uniche ricavate dal calendario amichevoli (max poche richieste)
+        dates = set()
+        for fr in FRIENDLY_SCHEDULE:
+            ko = fr.get('kickoff')
+            if ko:
+                dates.add(ko[:10])  # 'YYYY-MM-DD'
+        for d in sorted(dates):
+            try:
+                _ingest(_get(f"{HIGHLIGHTLY_BASE}/matches?date={d}&season={LIVE_SEASON}&limit=100"))
+            except Exception:
+                continue
+    else:
+        # Mondiale: poche partite, basta leagueId
+        _ingest(_get(f"{HIGHLIGHTLY_BASE}/matches?leagueId={LIVE_LEAGUE_ID}&season={LIVE_SEASON}&limit=100"))
+
     return found
 
 # Demo override: se SIM_DEMO è attivo, una partita "gioca" in 90 secondi reali

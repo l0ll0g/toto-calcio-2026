@@ -671,6 +671,7 @@ try:
     import urllib.error as _urlerr
 except Exception:
     _urlreq = None
+    _urlerr = None
 
 LIVE_STATE = {
     'last_poll': 0,            # timestamp ultimo polling
@@ -858,6 +859,66 @@ def api_live_raw():
                         'matches': out})
     except Exception as e:
         return jsonify({'leagueId': LIVE_LEAGUE_ID, 'error': str(e)})
+
+@app.route('/api/source_test')
+@login_required
+@admin_required
+def api_source_test():
+    """[Diagnostica admin] prova a contattare DA RENDER le varie fonti di dati
+    e riporta cosa risponde ciascuna (200 = funziona, 403 = IP bloccato, ecc.).
+    Serve a capire quale fonte è utilizzabile dal server."""
+    def _probe(url, headers, label):
+        out = {'label': label, 'url': url}
+        try:
+            req = _urlreq.Request(url, headers=headers)
+            with _urlreq.urlopen(req, timeout=12) as resp:
+                body = resp.read(400).decode('utf-8', 'replace')
+                out['status'] = resp.status
+                out['ok'] = True
+                out['sample'] = body[:300]
+        except _urlerr.HTTPError as e:
+            out['status'] = e.code
+            out['ok'] = False
+            try: out['sample'] = e.read(300).decode('utf-8','replace')
+            except Exception: out['sample'] = ''
+        except Exception as e:
+            out['status'] = None
+            out['ok'] = False
+            out['error'] = str(e)
+        return out
+
+    results = []
+
+    # 1) Highlightly con entrambi gli header (come fa l'app ora)
+    if HIGHLIGHTLY_KEY:
+        results.append(_probe(
+            f"{HIGHLIGHTLY_BASE}/matches?leagueId={LIVE_LEAGUE_ID}&season={LIVE_SEASON}&limit=3",
+            {'x-rapidapi-key': HIGHLIGHTLY_KEY, 'x-rapidapi-host': HIGHLIGHTLY_HOST},
+            'Highlightly (key+host)'))
+        # 1b) Highlightly con un User-Agent "da browser" (a volte sblocca Cloudflare)
+        results.append(_probe(
+            f"{HIGHLIGHTLY_BASE}/matches?leagueId={LIVE_LEAGUE_ID}&season={LIVE_SEASON}&limit=3",
+            {'x-rapidapi-key': HIGHLIGHTLY_KEY, 'x-rapidapi-host': HIGHLIGHTLY_HOST,
+             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+             'Accept': 'application/json'},
+            'Highlightly (key+host+browser UA)'))
+    else:
+        results.append({'label':'Highlightly', 'error':'HIGHLIGHTLY_KEY non impostata'})
+
+    # 2) football-data.org (se la chiave è presente)
+    fd_key = os.environ.get('FOOTBALL_DATA_KEY', '')
+    if fd_key:
+        results.append(_probe(
+            "https://api.football-data.org/v4/competitions/WC/matches",
+            {'X-Auth-Token': fd_key},
+            'football-data.org WC'))
+    else:
+        results.append({'label':'football-data.org', 'error':'FOOTBALL_DATA_KEY non impostata'})
+
+    # 3) Test "nudo" verso un sito qualunque, per vedere se Render esce su internet
+    results.append(_probe("https://api.github.com/zen", {'User-Agent':'toto-test'}, 'Internet check (github)'))
+
+    return jsonify({'tested_from':'Render server', 'results': results})
 
 @app.route('/api/live')
 def api_live():

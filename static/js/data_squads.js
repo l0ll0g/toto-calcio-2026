@@ -155,13 +155,13 @@ const WC_SQUADS = {
       {name:'Tabakovic',pos:'AT',age:28,caps:18,goals:5,assists:2,rating:3,starter:false,club:'B.Monchengladbach'},
     ]},
   'Brasile':{group:'C',coach:'Carlo Ancelotti',formation:'4-4-2',natCode:'br',
-    starting11:['Alisson','Wesley','Marquinhos','Gabriel','Douglas Santos','Luis Henrique','Casemiro','Bruno Guimaraes','Raphinha','Vinicius Jr','Matheus Cunha'],
+    starting11:['Alisson','Alex Sandro','Marquinhos','Gabriel','Douglas Santos','Luis Henrique','Casemiro','Bruno Guimaraes','Raphinha','Vinicius Jr','Matheus Cunha'],
     players:[
       {name:'Alisson',pos:'GK',age:33,caps:78,goals:0,assists:1,rating:5,starter:true,club:'Liverpool'},
       {name:'Ederson',pos:'GK',age:31,caps:30,goals:0,assists:0,rating:4,starter:false,club:'Fenerbahce'},
       {name:'Marquinhos',pos:'DF',age:31,caps:90,goals:6,assists:3,rating:5,starter:true,club:'PSG'},
       {name:'Gabriel',pos:'DF',age:27,caps:32,goals:2,assists:1,rating:4,starter:true,club:'Arsenal'},
-      {name:'Wesley',pos:'DF',age:23,caps:18,goals:1,assists:3,rating:3,starter:true,club:'Roma'},
+      {name:'Ederson (Atalanta)',pos:'CC',age:26,caps:8,goals:0,assists:1,rating:3,starter:false,club:'Atalanta'},
       {name:'Douglas Santos',pos:'DF',age:31,caps:22,goals:0,assists:2,rating:3,starter:true,club:'Zenit'},
       {name:'Bremer',pos:'DF',age:28,caps:25,goals:1,assists:0,rating:4,starter:false,club:'Juventus'},
       {name:'Bruno Guimaraes',pos:'CC',age:27,caps:38,goals:5,assists:8,rating:5,starter:true,club:'Newcastle'},
@@ -936,6 +936,7 @@ WC_SQUADS['Corea del Sud'].players.push({name:'Park Jin-seob',pos:'DF',age:25,ca
 WC_SQUADS['Corea del Sud'].players.push({name:'Paik Seung-ho',pos:'CC',age:29,caps:28,goals:2,assists:3,rating:3,starter:false,club:'Birmingham'});
 WC_SQUADS['Corea del Sud'].players.push({name:'Yang Hyun-jun',pos:'CC',age:23,caps:18,goals:3,assists:4,rating:3,starter:false,club:'Celtic'});
 WC_SQUADS['Corea del Sud'].players.push({name:'Lee Dong-gyeong',pos:'CC',age:27,caps:20,goals:2,assists:2,rating:3,starter:false,club:'Ulsan'});
+WC_SQUADS['Corea del Sud'].players.push({name:'Cho Wi-je',pos:'DF',age:24,caps:2,goals:0,assists:0,rating:2,starter:false,club:'Gimcheon'});
 WC_SQUADS['Repubblica Ceca'].players.push({name:'Kovar',pos:'GK',age:26,caps:5,goals:0,assists:0,rating:3,starter:false,club:'PSV'});
 WC_SQUADS['Repubblica Ceca'].players.push({name:'Krejci',pos:'DF',age:29,caps:35,goals:1,assists:2,rating:3,starter:false,club:'Wolves'});
 WC_SQUADS['Repubblica Ceca'].players.push({name:'Doudera',pos:'DF',age:27,caps:20,goals:0,assists:1,rating:3,starter:false,club:'Slavia'});
@@ -950,6 +951,7 @@ WC_SQUADS['Canada'].players.push({name:'Ahmed',pos:'CC',age:24,caps:10,goals:1,a
 WC_SQUADS['Canada'].players.push({name:'Millar',pos:'CC',age:24,caps:18,goals:2,assists:2,rating:3,starter:false,club:'Hull City'});
 WC_SQUADS['Canada'].players.push({name:'Shaffelburg',pos:'CC',age:25,caps:14,goals:3,assists:2,rating:3,starter:false,club:'LAFC'});
 WC_SQUADS['Canada'].players.push({name:'Choiniere',pos:'CC',age:24,caps:12,goals:2,assists:2,rating:3,starter:false,club:'LAFC'});
+WC_SQUADS['Canada'].players.push({name:'Jayden Nelson',pos:'AT',age:23,caps:10,goals:2,assists:2,rating:3,starter:false,club:'Rosenborg'});
 WC_SQUADS['Qatar'].players.push({name:'Abunada',pos:'GK',age:27,caps:14,goals:0,assists:0,rating:2,starter:false,club:'Al-Rayyan'});
 WC_SQUADS['Qatar'].players.push({name:'Zakaria',pos:'GK',age:31,caps:10,goals:0,assists:0,rating:2,starter:false,club:'Al-Duhail'});
 WC_SQUADS['Qatar'].players.push({name:'Mendes',pos:'DF',age:28,caps:24,goals:0,assists:1,rating:2,starter:false,club:'Al-Wakrah'});
@@ -1081,7 +1083,7 @@ WC_SQUADS['Olanda'].players.push({name:'Flekken',pos:'GK',age:31,caps:8,goals:0,
 WC_SQUADS['Olanda'].players.push({name:'Roefs',pos:'GK',age:26,caps:4,goals:0,assists:0,rating:2,starter:false,club:'Sunderland'});
 WC_SQUADS['Olanda'].players.push({name:'Hato',pos:'DF',age:20,caps:8,goals:0,assists:1,rating:3,starter:false,club:'Chelsea'});
 WC_SQUADS['Olanda'].players.push({name:'Van Hecke',pos:'DF',age:24,caps:12,goals:0,assists:0,rating:3,starter:false,club:'Brighton'});
-WC_SQUADS['Olanda'].players.push({name:'J. Timber',pos:'DF',age:23,caps:10,goals:0,assists:1,rating:3,starter:false,club:'Arsenal'});
+WC_SQUADS['Olanda'].players.push({name:'Geertruida',pos:'DF',age:25,caps:14,goals:0,assists:2,rating:3,starter:false,club:'Sunderland'});
 WC_SQUADS['Olanda'].players.push({name:'De Roon',pos:'CC',age:33,caps:48,goals:2,assists:4,rating:3,starter:false,club:'Atalanta'});
 WC_SQUADS['Olanda'].players.push({name:'Q. Timber',pos:'CC',age:22,caps:8,goals:1,assists:1,rating:3,starter:false,club:'Marsiglia'});
 WC_SQUADS['Olanda'].players.push({name:'Wieffer',pos:'CC',age:25,caps:10,goals:1,assists:2,rating:3,starter:false,club:'Brighton'});

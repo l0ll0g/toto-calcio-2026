@@ -865,32 +865,44 @@ def poll_live(force=False):
 @login_required
 @admin_required
 def api_live_raw():
-    """[Diagnostica admin] mostra le partite GREZZE ricevute dalla fonte live,
-    senza filtrare per le nostre squadre. Utile per verificare il collegamento."""
+    """[Diagnostica admin] cerca PER DATA (le date delle amichevoli) e mostra
+    SOLO le partite che coinvolgono le nostre nazionali, con data/stato/punteggio
+    grezzi da Highlightly. Serve a capire come l'API cataloga le partite."""
     if not LIVE_ENABLED:
-        return jsonify({'error':'Chiave HIGHLIGHTLY_KEY non impostata', 'leagueId': LIVE_LEAGUE_ID})
-    try:
-        headers = _hl_headers()
-        url = f"{HIGHLIGHTLY_BASE}/matches?leagueId={LIVE_LEAGUE_ID}&season={LIVE_SEASON}&limit=100"
-        req = _urlreq.Request(url, headers=headers)
-        with _urlreq.urlopen(req, timeout=12) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-        out = []
-        for m in data.get('data', [])[:40]:
-            st = m.get('state') or {}
-            out.append({
-                'home': (m.get('homeTeam') or {}).get('name'),
-                'away': (m.get('awayTeam') or {}).get('name'),
-                'status': st.get('description'),
-                'score': (st.get('score') or {}).get('current') or '',
-                'date': m.get('date'),
-                'league': (m.get('league') or {}).get('name'),
-            })
-        return jsonify({'leagueId': LIVE_LEAGUE_ID,
-                        'count': (data.get('pagination') or {}).get('totalCount', len(data.get('data', []))),
-                        'matches': out})
-    except Exception as e:
-        return jsonify({'leagueId': LIVE_LEAGUE_ID, 'error': str(e)})
+        return jsonify({'error':'Chiave HIGHLIGHTLY_KEY non impostata'})
+    headers = _hl_headers()
+    # nomi (in inglese) delle nostre nazionali, per filtrare i risultati grezzi
+    our_names = set()
+    for fr in FRIENDLY_SCHEDULE:
+        our_names.add(_norm(LIVE_TEAM_ALIASES.get(fr['home'], fr['home'])))
+        our_names.add(_norm(LIVE_TEAM_ALIASES.get(fr['away'], fr['away'])))
+    dates = sorted({fr['kickoff'][:10] for fr in FRIENDLY_SCHEDULE if fr.get('kickoff')})
+    report = {}
+    for d in dates:
+        block = {'total_in_date': None, 'our_matches': []}
+        try:
+            url = f"{HIGHLIGHTLY_BASE}/matches?date={d}&season={LIVE_SEASON}&limit=100"
+            req = _urlreq.Request(url, headers=headers)
+            with _urlreq.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            block['total_in_date'] = (data.get('pagination') or {}).get('totalCount', len(data.get('data', [])))
+            block['returned'] = len(data.get('data', []))
+            for m in data.get('data', []):
+                h = (m.get('homeTeam') or {}).get('name') or ''
+                a = (m.get('awayTeam') or {}).get('name') or ''
+                if _norm(h) in our_names or _norm(a) in our_names:
+                    st = m.get('state') or {}
+                    block['our_matches'].append({
+                        'home': h, 'away': a,
+                        'status': st.get('description'),
+                        'score': (st.get('score') or {}).get('current') or '',
+                        'date': m.get('date'),
+                        'league': (m.get('league') or {}).get('name'),
+                    })
+        except Exception as e:
+            block['error'] = str(e)
+        report[d] = block
+    return jsonify({'dates_queried': dates, 'report': report})
 
 @app.route('/api/source_test')
 @login_required

@@ -114,6 +114,7 @@ KO_PRED      = PersistentDict('ko_pred')        # email -> {koMatchId: {score, a
 KO_SUBMITTED = PersistentDict('ko_submitted')   # email -> bool
 SUBMITTED    = PersistentDict('submitted')      # email -> [group_letters]
 RESULTS      = PersistentDict('results')        # matchId -> {pick, score}
+MANUAL_RESULTS = PersistentDict('manual_results')  # matchId -> True (risultati bloccati dall'admin, il poll non li tocca)
 RESET_TOKENS = PersistentDict('reset_tokens')   # token -> email
 # Leagues
 LEAGUES      = PersistentDict('leagues')        # league_id -> {name, password, admin_email, members:[], created_at}
@@ -476,14 +477,46 @@ def get_results():
 @login_required
 @admin_required
 def set_result():
+    """Imposta/corregge a mano il risultato di una partita. Diventa un OVERRIDE:
+    il poll automatico non lo sovrascriverà più (finché non viene rilasciato)."""
     d = request.json
     mid   = d.get('matchId')
+    score = (d.get('score') or '').strip()
     pick  = d.get('pick')
-    score = d.get('score','')
+    # se arriva solo lo score (es. "3-0"), deduciamo l'esito
+    if score and pick not in ('1','X','2'):
+        try:
+            h, a = map(int, score.split('-'))
+            pick = '1' if h > a else '2' if a > h else 'X'
+        except Exception:
+            return jsonify({'error':'Punteggio non valido (usa formato "3-0")'}), 400
     if not mid or pick not in ('1','X','2'):
         return jsonify({'error':'Dati non validi'}), 400
     RESULTS[mid] = {'pick':pick,'score':score}
-    return jsonify({'ok':True})
+    MANUAL_RESULTS[mid] = True   # blocca: la fonte live non lo tocca più
+    return jsonify({'ok':True, 'manual':True, 'result':{'pick':pick,'score':score}})
+
+@app.route('/api/results/release', methods=['POST'])
+@login_required
+@admin_required
+def release_result():
+    """Rimuove l'override manuale: la partita torna a essere aggiornata dalla
+    fonte live automatica al prossimo poll."""
+    d = request.json or {}
+    mid = d.get('matchId')
+    if not mid:
+        return jsonify({'error':'matchId mancante'}), 400
+    if mid in MANUAL_RESULTS:
+        MANUAL_RESULTS.pop(mid)
+    LIVE_STATE['last_poll'] = 0   # forza un nuovo poll
+    return jsonify({'ok':True, 'released':True})
+
+@app.route('/api/manual_results', methods=['GET'])
+@login_required
+@admin_required
+def get_manual_results():
+    """Elenco dei matchId con override manuale attivo."""
+    return jsonify({'manual': list(MANUAL_RESULTS.keys())})
 
 @app.route('/api/special_results', methods=['GET'])
 def get_special_results():
@@ -879,8 +912,11 @@ def poll_live(force=False):
             LIVE_STATE['simulation'] = True
         LIVE_STATE['matches'] = matches
         LIVE_STATE['error'] = None
-        # Aggiorna RESULTS per le partite FINISHED (così la classifica si muove)
+        # Aggiorna RESULTS per le partite FINISHED (così la classifica si muove).
+        # NON tocca le partite con risultato corretto a mano dall'admin (override).
         for mid, info in matches.items():
+            if mid in MANUAL_RESULTS:
+                continue  # risultato bloccato manualmente: la fonte non lo sovrascrive
             if info['status'] == 'FINISHED' and info['score']:
                 h, a = map(int, info['score'].split('-'))
                 pick = '1' if h > a else '2' if a > h else 'X'

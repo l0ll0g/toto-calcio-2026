@@ -699,11 +699,17 @@ def _alias(name):
     return LIVE_TEAM_ALIASES.get(name, name)
 
 def _build_alias_lookup():
-    """Mappa nome-API (lower) -> nostro matchId, per ogni partita conosciuta."""
+    """Mappa nome-API (lower) -> nostro matchId, per ogni partita conosciuta.
+    Aggiunge anche la chiave invertita (away, home) perché alcune fonti (es.
+    Highlightly) possono catalogare casa/trasferta al contrario."""
     lut = {}
     def add(mid, home, away):
         key = (_norm(_alias(home)), _norm(_alias(away)))
-        lut[key] = {'matchId': mid, 'home': home, 'away': away}
+        lut[key] = {'matchId': mid, 'home': home, 'away': away, 'reversed': False}
+        # chiave invertita: stessa partita ma con casa/trasferta scambiate sulla fonte
+        rkey = (_norm(_alias(away)), _norm(_alias(home)))
+        if rkey not in lut:
+            lut[rkey] = {'matchId': mid, 'home': home, 'away': away, 'reversed': True}
     for grp in WC_MATCH_SCHEDULE.values():
         for m in grp:
             add(m['id'], m['home'], m['away'])
@@ -760,7 +766,11 @@ def _fetch_live_real():
             if cur and '-' in cur:
                 parts = [p.strip() for p in cur.split('-')]
                 if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                    score_str = f"{parts[0]}-{parts[1]}"
+                    # se la fonte ha casa/trasferta invertite rispetto a noi, scambiamo
+                    if match_ref.get('reversed'):
+                        score_str = f"{parts[1]}-{parts[0]}"
+                    else:
+                        score_str = f"{parts[0]}-{parts[1]}"
             found[match_ref['matchId']] = {
                 'home': match_ref['home'], 'away': match_ref['away'],
                 'score': score_str, 'status': status, 'minute': st.get('clock'),
@@ -771,16 +781,32 @@ def _fetch_live_real():
         with _urlreq.urlopen(req, timeout=12) as resp:
             return json.loads(resp.read().decode('utf-8'))
 
+    def _get_all_for_date(d):
+        """Scarica le partite di una data scorrendo le pagine, ma si FERMA appena
+        ha trovato tutte le nostre partite di quel giorno (per risparmiare richieste,
+        il piano gratuito ne dà 100/giorno)."""
+        # quante nostre partite ci aspettiamo in questa data
+        want = {fr['id'] for fr in FRIENDLY_SCHEDULE if (fr.get('kickoff') or '')[:10] == d}
+        offset = 0
+        for _ in range(6):  # tetto di sicurezza: max 6 pagine
+            data = _get(f"{HIGHLIGHTLY_BASE}/matches?date={d}&season={LIVE_SEASON}&limit=100&offset={offset}")
+            _ingest(data)
+            # se abbiamo già trovato tutte le nostre partite di oggi, basta
+            if want and want.issubset(set(found.keys())):
+                break
+            pag = data.get('pagination') or {}
+            total = pag.get('totalCount', 0)
+            got = len(data.get('data', []))
+            offset += got
+            if got == 0 or offset >= total:
+                break
+
     if use_dates:
-        # Date UTC uniche ricavate dal calendario amichevoli (max poche richieste)
-        dates = set()
-        for fr in FRIENDLY_SCHEDULE:
-            ko = fr.get('kickoff')
-            if ko:
-                dates.add(ko[:10])  # 'YYYY-MM-DD'
-        for d in sorted(dates):
+        # Date UTC uniche ricavate dal calendario amichevoli
+        dates = sorted({fr['kickoff'][:10] for fr in FRIENDLY_SCHEDULE if fr.get('kickoff')})
+        for d in dates:
             try:
-                _ingest(_get(f"{HIGHLIGHTLY_BASE}/matches?date={d}&season={LIVE_SEASON}&limit=100"))
+                _get_all_for_date(d)
             except Exception:
                 continue
     else:

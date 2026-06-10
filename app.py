@@ -909,24 +909,31 @@ def api_live_raw():
     for d in dates:
         block = {'total_in_date': None, 'our_matches': []}
         try:
-            url = f"{HIGHLIGHTLY_BASE}/matches?date={d}&season={LIVE_SEASON}&limit=100"
-            req = _urlreq.Request(url, headers=headers)
-            with _urlreq.urlopen(req, timeout=12) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            block['total_in_date'] = (data.get('pagination') or {}).get('totalCount', len(data.get('data', [])))
-            block['returned'] = len(data.get('data', []))
-            for m in data.get('data', []):
-                h = (m.get('homeTeam') or {}).get('name') or ''
-                a = (m.get('awayTeam') or {}).get('name') or ''
-                if _norm(h) in our_names or _norm(a) in our_names:
-                    st = m.get('state') or {}
-                    block['our_matches'].append({
-                        'home': h, 'away': a,
-                        'status': st.get('description'),
-                        'score': (st.get('score') or {}).get('current') or '',
-                        'date': m.get('date'),
-                        'league': (m.get('league') or {}).get('name'),
-                    })
+            offset = 0
+            total = None
+            for _ in range(6):
+                url = f"{HIGHLIGHTLY_BASE}/matches?date={d}&season={LIVE_SEASON}&limit=100&offset={offset}"
+                req = _urlreq.Request(url, headers=headers)
+                with _urlreq.urlopen(req, timeout=12) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                total = (data.get('pagination') or {}).get('totalCount', 0)
+                block['total_in_date'] = total
+                got = len(data.get('data', []))
+                for m in data.get('data', []):
+                    h = (m.get('homeTeam') or {}).get('name') or ''
+                    a = (m.get('awayTeam') or {}).get('name') or ''
+                    if _norm(h) in our_names or _norm(a) in our_names:
+                        st = m.get('state') or {}
+                        block['our_matches'].append({
+                            'home': h, 'away': a,
+                            'status': st.get('description'),
+                            'score': (st.get('score') or {}).get('current') or '',
+                            'date': m.get('date'),
+                            'league': (m.get('league') or {}).get('name'),
+                        })
+                offset += got
+                if got == 0 or offset >= total:
+                    break
         except Exception as e:
             block['error'] = str(e)
         report[d] = block

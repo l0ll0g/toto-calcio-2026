@@ -2,7 +2,11 @@
 <html lang="it">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="theme-color" content="#001533"/>
   <title>Totò Calcio 2026 — FIFA World Cup</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23C8A44A'/><text x='16' y='23' font-size='20' text-anchor='middle' fill='%23001533'>TC</text></svg>"/>
 
@@ -360,6 +364,30 @@
     /* Live pulsing dot */
     .live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ef4444;margin-right:5px;vertical-align:middle;box-shadow:0 0 0 0 rgba(239,68,68,0.6);animation:livePulse 1.4s infinite}
     @keyframes livePulse{0%{box-shadow:0 0 0 0 rgba(239,68,68,0.6)}70%{box-shadow:0 0 0 7px rgba(239,68,68,0)}100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}
+
+    /* ── Rifiniture mobile ───────────────────────────────────────────── */
+    /* Niente scroll orizzontale accidentale */
+    html, body { max-width: 100%; overflow-x: hidden; }
+    /* Rispetta le aree sicure dell'iPhone (notch in alto, barra home in basso) */
+    body { padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+           padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+    /* Tap reattivo: niente evidenziazione blu/grigia al tocco, niente ritardo */
+    * { -webkit-tap-highlight-color: transparent; }
+    button, a, .match-card, input { touch-action: manipulation; }
+    /* Scorrimento fluido su iOS */
+    body { -webkit-overflow-scrolling: touch; }
+    /* Su schermi piccoli: input punteggio mai sotto i 16px (così iOS NON zooma da solo
+       quando li tocchi) e aree di tocco un filo più comode */
+    @media (max-width: 480px) {
+      input[type="text"]:not(.score-inp):not(.fr-score-h):not(.fr-score-a):not(.ko-score-inp),
+      input[type="number"], input[type="email"], input[type="password"], select, textarea {
+        font-size: 16px !important;
+      }
+      .score-inp, .fr-score-h, .fr-score-a, .ko-score-inp { min-height: 46px; }
+      button { min-height: 40px; }
+    }
+    /* Evita che il testo venga ridimensionato in automatico ruotando il telefono */
+    html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   </style>
 </head>
 <body>

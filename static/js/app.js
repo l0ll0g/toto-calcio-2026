@@ -2007,6 +2007,25 @@ function html_admin() {
         </div>
       </div>
 
+      <!-- Correzione manuale risultati -->
+      <div class="glass rounded-2xl p-5 mb-5">
+        <div class="font-display text-lg text-white tracking-wide mb-2">
+          <i class="fa-solid fa-pen-to-square text-gold mr-2"></i>CORREGGI RISULTATI
+        </div>
+        <p class="text-white/40 text-sm mb-4">Se la fonte automatica fornisce un risultato sbagliato, correggilo qui. Una volta corretto a mano, l'aggiornamento automatico <strong class="text-gold">non lo tocca più</strong> finché non premi "Sblocca".</p>
+        <div class="space-y-2" id="adm-manual-list">
+          ${(typeof FRIENDLY_MATCHES!=='undefined'?FRIENDLY_MATCHES:[]).map(m=>`
+            <div class="flex items-center gap-2 p-2 rounded-lg" style="background:rgba(255,255,255,0.03)">
+              <span class="text-white/70 text-xs flex-1 truncate">${m.home} - ${m.away}</span>
+              <input class="adm-mr-score" data-mid="${m.id}" type="text" placeholder="es. 3-0" maxlength="5"
+                style="width:64px;height:34px;text-align:center;border-radius:8px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#C8A44A;outline:none;font-size:0.85rem">
+              <button class="adm-mr-save px-3 py-1.5 rounded-lg text-xs font-bold" data-mid="${m.id}" style="background:rgba(200,164,74,0.15);border:1px solid rgba(200,164,74,0.3);color:#C8A44A">Salva</button>
+              <button class="adm-mr-release px-3 py-1.5 rounded-lg text-xs font-bold" data-mid="${m.id}" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.5)">Sblocca</button>
+            </div>`).join('')}
+        </div>
+        <div id="adm-manual-status" class="text-xs mt-2"></div>
+      </div>
+
       <!-- Leaderboard overview -->
       <div class="glass rounded-2xl p-5">
         <div class="font-display text-lg text-white tracking-wide mb-4">
@@ -2104,6 +2123,37 @@ function bind_admin() {
     advStatus(r.ok?`Capocannoniere salvato: ${v||'—'}`:'Errore', !!r.ok);
     await loadUserData();
   });
+  // Correzione manuale risultati
+  const manualStatus = (msg, ok=true) => {
+    const el = document.getElementById('adm-manual-status');
+    if (el) { el.textContent = msg; el.style.color = ok ? '#22c55e' : '#fca5a5'; }
+  };
+  document.querySelectorAll('.adm-mr-save').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const mid = btn.dataset.mid;
+      const inp = document.querySelector(`.adm-mr-score[data-mid="${mid}"]`);
+      const score = (inp?.value || '').trim();
+      if (!/^\d{1,2}-\d{1,2}$/.test(score)) { manualStatus('Formato punteggio non valido (es. 3-0)', false); return; }
+      try {
+        const r = await api('/api/results', {method:'POST', body:{matchId:mid, score}});
+        if (r.ok) {
+          manualStatus(`Risultato di ${mid} corretto a ${score} e bloccato.`);
+          S.results = await api('/api/results');
+        } else manualStatus(r.error||'Errore', false);
+      } catch(e) { manualStatus('Errore di rete', false); }
+    });
+  });
+  document.querySelectorAll('.adm-mr-release').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const mid = btn.dataset.mid;
+      try {
+        const r = await api('/api/results/release', {method:'POST', body:{matchId:mid}});
+        if (r.ok) manualStatus(`${mid} sbloccato: torna all'aggiornamento automatico.`);
+        else manualStatus(r.error||'Errore', false);
+      } catch(e) { manualStatus('Errore di rete', false); }
+    });
+  });
+
   document.getElementById('adm-save-final')?.addEventListener('click', async () => {
     const home=document.getElementById('adm-final-home').value.trim();
     const away=document.getElementById('adm-final-away').value.trim();

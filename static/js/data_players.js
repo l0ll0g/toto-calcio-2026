@@ -76,13 +76,41 @@ const WC_PLAYERS = [
   {name:'Son Heung-min',nat:'Corea del S.',natCode:'kr',pos:'Ala',age:34,goals:1,assists:2,wc_wins:0,rating:4,club:'Tottenham'},
 ];
 
+// Pool di ricerca capocannoniere: unisce il database curato (WC_PLAYERS, con
+// dati ricchi tipo Mondiali vinti) a TUTTI i convocati delle 48 rose (WC_SQUADS),
+// così qualunque giocatore in lista è cercabile. Costruito una sola volta.
+let _TS_POOL = null;
+function tsPool() {
+  if (_TS_POOL) return _TS_POOL;
+  const out = [], seen = new Set();
+  if (typeof WC_PLAYERS !== 'undefined') {
+    WC_PLAYERS.forEach(p => { out.push(p); seen.add(p.name.toLowerCase()); });
+  }
+  const POSMAP = { GK:'Portiere', DF:'Difensore', CC:'Centrocampista', AT:'Attaccante' };
+  if (typeof WC_SQUADS !== 'undefined') {
+    for (const [team, t] of Object.entries(WC_SQUADS)) {
+      (t.players || []).forEach(p => {
+        const key = p.name.toLowerCase();
+        if (seen.has(key)) return;          // mantieni la versione curata se esiste
+        seen.add(key);
+        out.push({ name:p.name, nat:team, natCode:t.natCode||'',
+                   pos:POSMAP[p.pos]||p.pos, age:p.age, goals:p.goals,
+                   assists:p.assists||0, wc_wins:0, rating:p.rating||3,
+                   club:p.club, games:p.caps||0 });
+      });
+    }
+  }
+  _TS_POOL = out;
+  return out;
+}
+
 function searchPlayers(query) {
   if (!query || query.length < 2) return [];
   const q = query.toLowerCase();
-  return WC_PLAYERS.filter(p =>
+  return tsPool().filter(p =>
     p.name.toLowerCase().includes(q) ||
-    p.nat.toLowerCase().includes(q) ||
-    p.club.toLowerCase().includes(q) ||
-    p.pos.toLowerCase().includes(q)
-  ).slice(0, 8);
+    (p.nat||'').toLowerCase().includes(q) ||
+    (p.club||'').toLowerCase().includes(q) ||
+    (p.pos||'').toLowerCase().includes(q)
+  ).slice(0, 12);
 }

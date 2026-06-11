@@ -103,6 +103,10 @@ WC_MATCH_SCHEDULE = {
   'L':[{'id':'wc-L-m1','home':'Inghilterra','away':'Croazia'},{'id':'wc-L-m2','home':'Ghana','away':'Panama'},{'id':'wc-L-m3','home':'Inghilterra','away':'Ghana'},{'id':'wc-L-m4','home':'Panama','away':'Croazia'},{'id':'wc-L-m5','home':'Panama','away':'Inghilterra'},{'id':'wc-L-m6','home':'Croazia','away':'Ghana'}],
 }
 
+# Date (UTC) delle partite del Mondiale: usate per cercare i risultati PER DATA,
+# esattamente come per le amichevoli (la fonte abbina per coppia di squadre).
+WC_MATCH_DATES = {'wc-A-m1':'2026-06-11', 'wc-A-m2':'2026-06-12', 'wc-A-m3':'2026-06-18', 'wc-A-m4':'2026-06-19', 'wc-A-m5':'2026-06-25', 'wc-A-m6':'2026-06-25', 'wc-B-m1':'2026-06-12', 'wc-B-m2':'2026-06-13', 'wc-B-m3':'2026-06-18', 'wc-B-m4':'2026-06-19', 'wc-B-m5':'2026-06-24', 'wc-B-m6':'2026-06-24', 'wc-C-m1':'2026-06-14', 'wc-C-m2':'2026-06-14', 'wc-C-m3':'2026-06-20', 'wc-C-m4':'2026-06-20', 'wc-C-m5':'2026-06-25', 'wc-C-m6':'2026-06-25', 'wc-D-m1':'2026-06-13', 'wc-D-m2':'2026-06-13', 'wc-D-m3':'2026-06-19', 'wc-D-m4':'2026-06-19', 'wc-D-m5':'2026-06-26', 'wc-D-m6':'2026-06-26', 'wc-E-m1':'2026-06-14', 'wc-E-m2':'2026-06-14', 'wc-E-m3':'2026-06-20', 'wc-E-m4':'2026-06-21', 'wc-E-m5':'2026-06-25', 'wc-E-m6':'2026-06-25', 'wc-F-m1':'2026-06-14', 'wc-F-m2':'2026-06-15', 'wc-F-m3':'2026-06-20', 'wc-F-m4':'2026-06-20', 'wc-F-m5':'2026-06-25', 'wc-F-m6':'2026-06-25', 'wc-G-m1':'2026-06-15', 'wc-G-m2':'2026-06-16', 'wc-G-m3':'2026-06-21', 'wc-G-m4':'2026-06-22', 'wc-G-m5':'2026-06-27', 'wc-G-m6':'2026-06-27', 'wc-H-m1':'2026-06-15', 'wc-H-m2':'2026-06-16', 'wc-H-m3':'2026-06-21', 'wc-H-m4':'2026-06-22', 'wc-H-m5':'2026-06-27', 'wc-H-m6':'2026-06-27', 'wc-I-m1':'2026-06-16', 'wc-I-m2':'2026-06-17', 'wc-I-m3':'2026-06-22', 'wc-I-m4':'2026-06-23', 'wc-I-m5':'2026-06-26', 'wc-I-m6':'2026-06-26', 'wc-J-m1':'2026-06-16', 'wc-J-m2':'2026-06-17', 'wc-J-m3':'2026-06-22', 'wc-J-m4':'2026-06-23', 'wc-J-m5':'2026-06-28', 'wc-J-m6':'2026-06-28', 'wc-K-m1':'2026-06-17', 'wc-K-m2':'2026-06-18', 'wc-K-m3':'2026-06-23', 'wc-K-m4':'2026-06-24', 'wc-K-m5':'2026-06-27', 'wc-K-m6':'2026-06-27', 'wc-L-m1':'2026-06-17', 'wc-L-m2':'2026-06-17', 'wc-L-m3':'2026-06-23', 'wc-L-m4':'2026-06-23', 'wc-L-m5':'2026-06-27', 'wc-L-m6':'2026-06-27'}
+
 # ── Persistent stores (SQLite-backed, survive restarts) ────────────────────
 from storage import PersistentDict
 import storage as _storage_mod
@@ -124,6 +128,18 @@ TOPSCORER_PRED = PersistentDict('topscorer_pred')  # email -> player_name
 FINAL_PRED     = PersistentDict('final_pred')      # email -> {home, away, winner, score}
 # Real outcomes for special bets (admin sets these)
 SPECIAL_RESULTS = PersistentDict('special_results')  # 'topscorer'->name, 'final'->{home,away,winner,score}
+LIVE_CONFIG = PersistentDict('live_config')  # fonte live runtime: 'league_id','season','by_date' ('0'/'1')
+
+def _live_cfg(key, default):
+    v = LIVE_CONFIG.get(key)
+    return v if v not in (None, '') else default
+def _cfg_league_id():
+    return str(_live_cfg('league_id', LIVE_LEAGUE_ID))
+def _cfg_season():
+    return str(_live_cfg('season', LIVE_SEASON))
+def _cfg_by_date():
+    raw = _live_cfg('by_date', '1' if os.environ.get('LIVE_BY_DATE', '1').strip() not in ('0', '', 'false', 'False') else '0')
+    return str(raw).strip() not in ('0', '', 'false', 'False')
 
 # ── Per-league prediction scoping ──────────────────────────────────────
 # I pronostici sono salvati PER LEGA: la chiave dei vari store diventa
@@ -737,9 +753,11 @@ import time as _time
 try:
     import urllib.request as _urlreq
     import urllib.error as _urlerr
+    import urllib.parse as _urlparse
 except Exception:
     _urlreq = None
     _urlerr = None
+    _urlparse = None
 
 LIVE_STATE = {
     'last_poll': 0,            # timestamp ultimo polling
@@ -804,9 +822,10 @@ def _fetch_live_real():
     """
     headers = _hl_headers()
     found = {}
+    season = _cfg_season()
 
     # Modalità: se LIVE_BY_DATE attiva (default per le amichevoli), cerca per data.
-    use_dates = os.environ.get('LIVE_BY_DATE', '1').strip() not in ('0', '', 'false', 'False')
+    use_dates = _cfg_by_date()
 
     def _ingest(data):
         lut = _build_alias_lookup()
@@ -846,11 +865,12 @@ def _fetch_live_real():
         """Scarica le partite di una data scorrendo le pagine, ma si FERMA appena
         ha trovato tutte le nostre partite di quel giorno (per risparmiare richieste,
         il piano gratuito ne dà 100/giorno)."""
-        # quante nostre partite ci aspettiamo in questa data
+        # quante nostre partite ci aspettiamo in questa data (amichevoli + Mondiale)
         want = {fr['id'] for fr in FRIENDLY_SCHEDULE if (fr.get('kickoff') or '')[:10] == d}
+        want |= {mid for mid, dd in WC_MATCH_DATES.items() if dd == d}
         offset = 0
         for _ in range(6):  # tetto di sicurezza: max 6 pagine
-            data = _get(f"{HIGHLIGHTLY_BASE}/matches?date={d}&season={LIVE_SEASON}&limit=100&offset={offset}")
+            data = _get(f"{HIGHLIGHTLY_BASE}/matches?date={d}&season={season}&limit=100&offset={offset}")
             _ingest(data)
             # se abbiamo già trovato tutte le nostre partite di oggi, basta
             if want and want.issubset(set(found.keys())):
@@ -863,16 +883,42 @@ def _fetch_live_real():
                 break
 
     if use_dates:
-        # Date UTC uniche ricavate dal calendario amichevoli
-        dates = sorted({fr['kickoff'][:10] for fr in FRIENDLY_SCHEDULE if fr.get('kickoff')})
-        for d in dates:
+        # Stessa logica delle amichevoli (ricerca PER DATA), estesa al Mondiale.
+        # Per non sprecare le ~100 richieste/giorno del piano gratuito, interroghiamo
+        # SOLO le date di OGGI/IERI (UTC) e solo se c'è almeno una NOSTRA partita di
+        # quei giorni ancora SENZA risultato (in corso o appena finita).
+        now_utc = datetime.now(timezone.utc)
+        today = now_utc.date().isoformat()
+        yest  = (now_utc.date() - timedelta(days=1)).isoformat()
+        window = {today, yest}
+        our_dates = {}
+        for fr in FRIENDLY_SCHEDULE:
+            if fr.get('kickoff'):
+                our_dates[fr['id']] = fr['kickoff'][:10]
+        for mid, dd in WC_MATCH_DATES.items():
+            our_dates[mid] = dd
+        pending_dates = set()
+        for mid, dd in our_dates.items():
+            if dd in window and mid not in RESULTS and mid not in MANUAL_RESULTS:
+                pending_dates.add(dd)
+        for d in sorted(pending_dates):
             try:
                 _get_all_for_date(d)
             except Exception:
                 continue
     else:
-        # Mondiale: poche partite, basta leagueId
-        _ingest(_get(f"{HIGHLIGHTLY_BASE}/matches?leagueId={LIVE_LEAGUE_ID}&season={LIVE_SEASON}&limit=100"))
+        # Mondiale: una lega con ~104 partite -> scorri le pagine (limit 100).
+        league_id = _cfg_league_id()
+        offset = 0
+        for _ in range(6):  # tetto di sicurezza
+            data = _get(f"{HIGHLIGHTLY_BASE}/matches?leagueId={league_id}&season={season}&limit=100&offset={offset}")
+            _ingest(data)
+            pag = data.get('pagination') or {}
+            total = pag.get('totalCount', 0)
+            got = len(data.get('data', []))
+            offset += got
+            if got == 0 or offset >= total:
+                break
 
     return found
 
@@ -1082,6 +1128,109 @@ def api_live():
         'error': LIVE_STATE['error'],
         'poll_seconds': LIVE_POLL_SECONDS,
     })
+
+@app.route('/api/admin/live_config', methods=['GET'])
+@login_required
+@admin_required
+def admin_live_config_get():
+    return jsonify({
+        'enabled': LIVE_ENABLED,
+        'simulation': LIVE_STATE.get('simulation'),
+        'league_id': _cfg_league_id(),
+        'season': _cfg_season(),
+        'by_date': _cfg_by_date(),
+        'default_league_id': LIVE_LEAGUE_ID,
+        'matches_found': len(LIVE_STATE.get('matches', {})),
+        'error': LIVE_STATE.get('error'),
+    })
+
+@app.route('/api/admin/live_config', methods=['POST'])
+@login_required
+@admin_required
+def admin_live_config_set():
+    d = request.json or {}
+    if 'league_id' in d:
+        LIVE_CONFIG['league_id'] = str(d.get('league_id') or '').strip()
+    if 'season' in d:
+        LIVE_CONFIG['season'] = str(d.get('season') or '').strip()
+    if 'by_date' in d:
+        LIVE_CONFIG['by_date'] = '1' if d.get('by_date') else '0'
+    # forza un poll subito per applicare e verificare
+    LIVE_STATE['last_poll'] = 0
+    poll_live(force=True)
+    return jsonify({
+        'ok': True,
+        'league_id': _cfg_league_id(), 'season': _cfg_season(), 'by_date': _cfg_by_date(),
+        'matches_found': len(LIVE_STATE.get('matches', {})),
+        'matches': LIVE_STATE.get('matches', {}),
+        'error': LIVE_STATE.get('error'),
+    })
+
+@app.route('/api/admin/live_test')
+@login_required
+@admin_required
+def admin_live_test():
+    """Forza un aggiornamento live adesso e riporta cosa è stato trovato."""
+    LIVE_STATE['last_poll'] = 0
+    poll_live(force=True)
+    return jsonify({
+        'enabled': LIVE_ENABLED,
+        'simulation': LIVE_STATE.get('simulation'),
+        'league_id': _cfg_league_id(), 'season': _cfg_season(), 'by_date': _cfg_by_date(),
+        'matches': LIVE_STATE.get('matches', {}),
+        'error': LIVE_STATE.get('error'),
+    })
+
+@app.route('/api/admin/leagues_lookup')
+@login_required
+@admin_required
+def admin_leagues_lookup():
+    """[Diagnostica] cerca su Highlightly le leghe che corrispondono a una parola
+    (es. 'World Cup'), per scoprire l'id della Coppa del Mondo da impostare."""
+    if not LIVE_ENABLED:
+        return jsonify({'error': 'Chiave HIGHLIGHTLY_KEY non impostata'}), 400
+    if _urlreq is None:
+        return jsonify({'error': 'Rete non disponibile'}), 400
+    q = (request.args.get('q') or 'World Cup').strip()
+    season = _cfg_season()
+    headers = _hl_headers()
+    out = []
+    seen = set()
+    tried = []
+    # Prova alcune forme di query note dell'endpoint /leagues
+    candidates = [
+        f"{HIGHLIGHTLY_BASE}/leagues?leagueName={_urlparse.quote(q)}&limit=100",
+        f"{HIGHLIGHTLY_BASE}/leagues?leagueName={_urlparse.quote(q)}&season={season}&limit=100",
+        f"{HIGHLIGHTLY_BASE}/leagues?name={_urlparse.quote(q)}&limit=100",
+    ]
+    err = None
+    for url in candidates:
+        tried.append(url)
+        try:
+            req = _urlreq.Request(url, headers=headers)
+            with _urlreq.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+        except Exception as e:
+            err = str(e)
+            continue
+        rows = data.get('data') if isinstance(data, dict) else data
+        if not isinstance(rows, list):
+            continue
+        for lg in rows:
+            lid = lg.get('id')
+            if lid in seen:
+                continue
+            seen.add(lid)
+            out.append({
+                'id': lid,
+                'name': lg.get('name'),
+                'country': (lg.get('country') or {}).get('name') if isinstance(lg.get('country'), dict) else lg.get('country'),
+                'logo': lg.get('logo'),
+                'seasons': lg.get('seasons'),
+            })
+        if out:
+            break
+    return jsonify({'query': q, 'season': season, 'results': out, 'error': None if out else (err or 'Nessun risultato'), 'tried': tried})
 
 @app.route('/api/sim_demo', methods=['POST'])
 @login_required

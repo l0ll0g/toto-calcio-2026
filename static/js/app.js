@@ -794,7 +794,13 @@ function html_dash() {
         <button id="btn-admin-panel" class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-300" style="background:rgba(232,25,44,0.1);border:1px solid rgba(232,25,44,0.2)"><i class="fa-solid fa-shield-halved"></i> Admin</button>
         <a href="/api/export_excel" download class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-gold" style="background:rgba(200,164,74,0.1);border:1px solid rgba(200,164,74,0.2)"><i class="fa-solid fa-file-excel"></i> Excel</a>` : ''
     })}
-    ${S.isAdmin?`<div class="px-5 py-1.5 text-xs text-red-300/70 flex items-center gap-2" style="background:rgba(232,25,44,0.07);border-bottom:1px solid rgba(232,25,44,0.12)"><i class="fa-solid fa-shield-halved"></i> Admin: lorenzogucci05@gmail.com</div>`:''}
+    ${S.isAdmin?`<div class="px-4 py-2 flex items-center gap-2" style="background:rgba(232,25,44,0.07);border-bottom:1px solid rgba(232,25,44,0.12)">
+      <span class="text-xs text-red-300/70 flex items-center gap-2 min-w-0 truncate"><i class="fa-solid fa-shield-halved flex-shrink-0"></i><span class="truncate">Admin: lorenzogucci05@gmail.com</span></span>
+      <div class="flex gap-2 ml-auto flex-shrink-0 sm:hidden">
+        <button id="btn-admin-panel-m" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-red-300" style="background:rgba(232,25,44,0.12);border:1px solid rgba(232,25,44,0.28)"><i class="fa-solid fa-shield-halved"></i> Pannello</button>
+        <a href="/api/export_excel" download class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-gold" style="background:rgba(200,164,74,0.12);border:1px solid rgba(200,164,74,0.28)"><i class="fa-solid fa-file-excel"></i> Excel</a>
+      </div>
+    </div>`:''}
     <div class="deadline-bar" id="deadline-bar"></div>
     <main class="max-w-5xl mx-auto px-4 sm:px-6 py-8 anim-fade">
       <!-- Hero -->
@@ -969,6 +975,7 @@ function bind_dash() {
   document.getElementById('btn-wc')?.addEventListener('click', () => nav('worldcup'));
   document.getElementById('btn-teams')?.addEventListener('click', () => { S.teamsGroup='A'; S.teamsTeam=null; nav('teams'); });
   document.getElementById('btn-admin-panel')?.addEventListener('click', () => { S._prevView='dashboard'; nav('admin'); });
+  document.getElementById('btn-admin-panel-m')?.addEventListener('click', () => { S._prevView='dashboard'; nav('admin'); });
   document.getElementById('btn-manage-leagues')?.addEventListener('click', () => nav('leagues'));
   document.getElementById('btn-myresults')?.addEventListener('click', () => nav('myresults'));
   document.querySelectorAll('.lb-click').forEach(el => {
@@ -2166,6 +2173,31 @@ function html_admin() {
         </div>
       </div>
 
+      <!-- Fonte live Mondiale -->
+      <div class="glass rounded-2xl p-5 mb-5">
+        <div class="font-display text-lg text-white tracking-wide mb-2"><i class="fa-solid fa-satellite-dish text-gold mr-2"></i>FONTE LIVE MONDIALE</div>
+        <p class="text-white/40 text-sm mb-4">Collega i risultati automatici del Mondiale: imposta l'id della lega "World Cup" su Highlightly, modalità "per lega", poi prova subito. I risultati FINALI trovati aggiornano da soli la classifica.</p>
+        <div id="live-cfg-status" class="text-xs text-white/50 mb-3"><i class="fa-solid fa-spinner spinner mr-1"></i>Caricamento stato…</div>
+        <div class="space-y-3">
+          <div class="flex gap-2 items-center flex-wrap">
+            <label class="text-white/60 text-sm" style="width:88px">ID lega</label>
+            <input id="cfg-league-id" type="text" placeholder="es. 13549" style="flex:1;min-width:110px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#fff">
+            <button id="cfg-find" class="px-3 py-2 rounded-lg text-xs font-bold" style="background:rgba(200,164,74,0.15);border:1px solid rgba(200,164,74,0.3);color:#C8A44A"><i class="fa-solid fa-magnifying-glass mr-1"></i>Trova id Mondiale</button>
+          </div>
+          <div id="cfg-find-results" class="space-y-1"></div>
+          <div class="flex gap-2 items-center flex-wrap">
+            <label class="text-white/60 text-sm" style="width:88px">Stagione</label>
+            <input id="cfg-season" type="text" placeholder="2026" style="width:100px;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);color:#fff">
+            <label class="flex items-center gap-2 text-white/60 text-sm ml-2"><input id="cfg-bydate" type="checkbox"> cerca per data (amichevoli)</label>
+          </div>
+          <div class="flex gap-2 flex-wrap">
+            <button id="cfg-save" class="px-4 py-2 rounded-lg text-sm font-bold" style="background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.35);color:#22c55e"><i class="fa-solid fa-floppy-disk mr-1"></i>Salva e testa</button>
+            <button id="cfg-test" class="px-4 py-2 rounded-lg text-sm font-bold" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff"><i class="fa-solid fa-bolt mr-1"></i>Testa adesso</button>
+          </div>
+          <div id="cfg-test-out" class="text-xs"></div>
+        </div>
+      </div>
+
       <!-- Special results (capocannoniere + finale) -->
       <div class="glass rounded-2xl p-5 mb-5">
         <div class="font-display text-lg text-white tracking-wide mb-4">
@@ -2285,6 +2317,7 @@ async function loadAdminUsers() {
 function bind_admin() {
   bind_topbar_events();
   loadAdminUsers();
+  bindLiveConfig();
   document.getElementById('admin-users-refresh')?.addEventListener('click', loadAdminUsers);
 
   // ── Risultati speciali (capocannoniere + finale) ──
@@ -2407,6 +2440,79 @@ function bind_admin() {
       btn.classList.add('active');
       renderAdminMatches();
     });
+  });
+
+  // ── Fonte live Mondiale: stato + scoperta id + salva/testa ──
+  (async () => {
+    try {
+      const c = await api('/api/admin/live_config');
+      const st = document.getElementById('live-cfg-status');
+      const li = document.getElementById('cfg-league-id');
+      const se = document.getElementById('cfg-season');
+      const bd = document.getElementById('cfg-bydate');
+      if (li) li.value = c.league_id || '';
+      if (se) se.value = c.season || '';
+      if (bd) bd.checked = !!c.by_date;
+      if (st) st.innerHTML = c.enabled
+        ? `<i class="fa-solid fa-circle mr-1" style="font-size:8px;color:#22c55e"></i>Fonte attiva · lega <strong>${c.league_id||'—'}</strong> · stagione ${c.season||'—'} · ${c.by_date?'ricerca per data':'ricerca per lega'}`
+        : `<i class="fa-solid fa-circle mr-1" style="font-size:8px;color:#ef4444"></i>Chiave HIGHLIGHTLY_KEY non impostata su Render: la fonte automatica è spenta. Puoi comunque inserire i risultati a mano qui sotto.`;
+    } catch(e){}
+  })();
+
+  function _renderCfgTest(t){
+    const out = document.getElementById('cfg-test-out');
+    if (!out) return;
+    if (!t){ out.innerHTML=''; return; }
+    if (t.error){ out.innerHTML = `<div class="text-red-300 mt-1">${t.error}</div>`; return; }
+    const m = t.matches || {};
+    const keys = Object.keys(m);
+    if (!keys.length){ out.innerHTML = '<div class="text-white/40 mt-1">Nessuna nostra partita trovata adesso dalla fonte. È normale se in questo momento non ci sono partite in corso o appena concluse con queste squadre.</div>'; return; }
+    out.innerHTML = `<div class="text-white/60 mt-1 mb-1">Trovate ${keys.length} partite dalla fonte:</div>` + keys.map(k=>{
+      const x=m[k]; return `<div class="flex justify-between text-white/70 py-0.5"><span>${x.home} – ${x.away}</span><span class="text-gold">${x.score||'—'} · ${x.status}</span></div>`;
+    }).join('');
+  }
+
+  document.getElementById('cfg-find')?.addEventListener('click', async () => {
+    const box = document.getElementById('cfg-find-results');
+    box.innerHTML = '<div class="text-white/40 text-xs"><i class="fa-solid fa-spinner spinner mr-1"></i>Cerco la lega del Mondiale su Highlightly…</div>';
+    try {
+      const r = await api('/api/admin/leagues_lookup?q=' + encodeURIComponent('World Cup'));
+      const rows = (r && r.results) || [];
+      if (r && r.error && !rows.length){ box.innerHTML = `<div class="text-red-300 text-xs">${r.error}</div>`; return; }
+      if (!rows.length){ box.innerHTML = '<div class="text-white/40 text-xs">Nessuna lega trovata: imposta l\'id a mano se lo conosci.</div>'; return; }
+      box.innerHTML = rows.slice(0,8).map(l=>`
+        <button class="cfg-pick w-full text-left p-2 rounded-lg text-xs flex items-center gap-2" data-id="${l.id}" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08)">
+          <span class="text-gold font-bold">#${l.id}</span>
+          <span class="text-white">${l.name||''}</span>
+          ${l.country?`<span class="text-white/40">${l.country}</span>`:''}
+        </button>`).join('');
+      document.querySelectorAll('.cfg-pick').forEach(b=>b.addEventListener('click',()=>{
+        document.getElementById('cfg-league-id').value = b.dataset.id;
+        const bd=document.getElementById('cfg-bydate'); if (bd) bd.checked=false;
+      }));
+    } catch(e){ box.innerHTML = '<div class="text-red-300 text-xs">Errore nella ricerca.</div>'; }
+  });
+
+  document.getElementById('cfg-save')?.addEventListener('click', async () => {
+    const out = document.getElementById('cfg-test-out');
+    const body = {
+      league_id: (document.getElementById('cfg-league-id').value||'').trim(),
+      season:    (document.getElementById('cfg-season').value||'').trim(),
+      by_date:   document.getElementById('cfg-bydate').checked,
+    };
+    if (out) out.innerHTML = '<div class="text-white/40"><i class="fa-solid fa-spinner spinner mr-1"></i>Salvo la configurazione e provo la fonte…</div>';
+    try {
+      await api('/api/admin/live_config', {method:'POST', body});
+      _renderCfgTest(await api('/api/admin/live_test'));
+      showToast('Configurazione fonte live salvata');
+    } catch(e){ if(out) out.innerHTML = '<div class="text-red-300">Errore nel salvataggio.</div>'; }
+  });
+
+  document.getElementById('cfg-test')?.addEventListener('click', async () => {
+    const out = document.getElementById('cfg-test-out');
+    if (out) out.innerHTML = '<div class="text-white/40"><i class="fa-solid fa-spinner spinner mr-1"></i>Interrogo la fonte adesso…</div>';
+    try { _renderCfgTest(await api('/api/admin/live_test')); }
+    catch(e){ if(out) out.innerHTML = '<div class="text-red-300">Errore.</div>'; }
   });
 }
 

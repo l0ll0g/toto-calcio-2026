@@ -8,7 +8,7 @@ let S = {
   deadlineSecs:null, deadlinePassed:false,
   wcTab:'groups', wcGroup:'A', wcKoRound:0,
   selAvatar:'⚽', authMode:'login', authSubMode:'login', // authSubMode: login|register|forgot|reset
-  myLeagues:[], activeLeague:null,
+  myLeagues:[], activeLeague:null, activeLeagueId:null,
   topcorer:'', finalPred:{}, koPred:{}, koSubmitted:false,
   live:{matches:{},simulation:true,enabled:false}, _liveTimer:null,
   profileData:null,
@@ -58,9 +58,33 @@ async function boot() {
 }
 
 async function loadUserData() {
-  const [pd, lb, res, myLg] = await Promise.all([
-    api('/api/predictions'), api('/api/leaderboard'),
+  const [res, myLg] = await Promise.all([
     api('/api/results'), api('/api/leagues/mine')
+  ]);
+  S.results   = res;
+  S.myLeagues = Array.isArray(myLg) ? myLg : [];
+  // Scegli la lega attiva (l'ultima usata se ancora valida, altrimenti la prima)
+  if (!S.myLeagues.find(l => l.id === S.activeLeagueId)) S.activeLeagueId = null;
+  if (!S.activeLeagueId) {
+    let saved = null; try { saved = localStorage.getItem('tc_lg'); } catch(e){}
+    if (saved && S.myLeagues.find(l => l.id === saved)) S.activeLeagueId = saved;
+    else if (S.myLeagues.length) S.activeLeagueId = S.myLeagues[0].id;
+  }
+  await loadLeagueData();
+}
+
+// Carica pronostici + classifica della lega ATTIVA (ogni lega è indipendente)
+async function loadLeagueData() {
+  if (!S.activeLeagueId) {
+    S.predictions={}; S.submitted=[]; S.topscorer=''; S.finalPred={};
+    S.koPred={}; S.koSubmitted=false; S.leaderboard=[]; S.activeLeague=null;
+    return;
+  }
+  try { localStorage.setItem('tc_lg', S.activeLeagueId); } catch(e){}
+  const lidq = encodeURIComponent(S.activeLeagueId);
+  const [pd, detail] = await Promise.all([
+    api('/api/predictions?league=' + lidq),
+    api('/api/leagues/' + lidq),
   ]);
   S.predictions  = pd.predictions || {};
   S.submitted    = pd.submitted   || [];
@@ -68,10 +92,20 @@ async function loadUserData() {
   S.finalPred    = pd.final_pred  || {};
   S.koPred       = pd.ko_pred     || {};
   S.koSubmitted  = pd.ko_submitted|| false;
-  S.leaderboard  = lb;
-  S.results      = res;
-  S.myLeagues    = Array.isArray(myLg) ? myLg : [];
+  S.activeLeague = detail || null;
+  S.leaderboard  = (detail && detail.leaderboard) || [];
 }
+
+// Cambia lega attiva (ricarica pronostici e classifica di quella lega)
+async function switchLeague(lid) {
+  if (lid === S.activeLeagueId) return;
+  S.activeLeagueId = lid;
+  await loadLeagueData();
+  render();
+}
+
+// Body con la lega attiva, per gli endpoint dei pronostici
+function lgBody(b) { return Object.assign({ league: S.activeLeagueId }, b || {}); }
 
 async function handleJoinLink() {
   const res = await api(`/api/leagues/join_by_link/${S.joinLid}`, {method:'POST'});
@@ -147,7 +181,6 @@ function render() {
     case 'leagueDetail': root.innerHTML=html_leagueDetail();bind_leagueDetail(); break;
     case 'admin':        root.innerHTML=html_admin();       bind_admin();        break;
     case 'teams':        root.innerHTML=html_teams();       bind_teams();        break;
-    case 'friendlies':   root.innerHTML=html_friendlies();  bind_friendlies();   break;
   }
 }
 
@@ -189,7 +222,7 @@ function bind_topbar_events() {
   document.getElementById('btn-back')?.addEventListener('click', () => {
     // Teams detail → teams list; teams list → dashboard
     if (S.view === 'teams' && S.teamsTeam) { S.teamsTeam = null; render(); return; }
-    if (S.view==='worldcup'||S.view==='leagueDetail'||S.view==='teams'||S.view==='admin'||S.view==='friendlies') nav('dashboard');
+    if (S.view==='worldcup'||S.view==='leagueDetail'||S.view==='teams'||S.view==='admin') nav('dashboard');
     else if (S.view==='profile') nav(S._prevView||'dashboard');
     else nav('dashboard');
   });
@@ -497,8 +530,8 @@ function bind_leagues() {
   document.querySelectorAll('.league-entry').forEach(btn => {
     btn.addEventListener('click', async () => {
       const lid = btn.dataset.lid;
-      const detail = await api(`/api/leagues/${lid}`);
-      S.activeLeague = detail;
+      S.activeLeagueId = lid;
+      await loadLeagueData();
       nav('leagueDetail');
     });
   });
@@ -518,6 +551,7 @@ function bind_leagues() {
     if (!name||!pw){document.getElementById('create-err').textContent='Nome e password obbligatori';document.getElementById('create-err').classList.remove('hidden');return;}
     const res=await api('/api/leagues',{method:'POST',body:{name,password:pw}});
     if (res.error){document.getElementById('create-err').textContent=res.error;document.getElementById('create-err').classList.remove('hidden');return;}
+    if (res.league && res.league.id) S.activeLeagueId = res.league.id;
     await loadUserData();
     S._flash = `Lega "${name}" creata con successo!`;
     nav('dashboard');
@@ -528,6 +562,7 @@ function bind_leagues() {
     if (!name||!pw){document.getElementById('join-err').textContent='Nome e password obbligatori';document.getElementById('join-err').classList.remove('hidden');return;}
     const res=await api('/api/leagues/join',{method:'POST',body:{name,password:pw}});
     if (res.error){document.getElementById('join-err').textContent=res.error;document.getElementById('join-err').classList.remove('hidden');return;}
+    if (res.league && res.league.id) S.activeLeagueId = res.league.id;
     await loadUserData();
     S._flash = `Sei entrato nella lega "${name}"!`;
     nav('dashboard');
@@ -686,18 +721,6 @@ function html_dash() {
         <i class="fa-solid fa-arrow-right text-gold/50 text-sm flex-shrink-0"></i>
       </button>
 
-      <!-- Amichevoli pre-Mondiale (test live) -->
-      <button id="btn-friendlies" class="w-full glass rounded-2xl p-4 mb-5 flex items-center gap-4 hover:border-emerald-400/30 transition-all text-left" style="border-color:rgba(34,197,94,0.18)">
-        <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0" style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.25)">
-          <i class="fa-solid fa-futbol text-emerald-400 text-xl"></i>
-        </div>
-        <div class="flex-1">
-          <div class="font-display text-lg text-white tracking-wide">AMICHEVOLI <span class="text-emerald-400 text-xs align-middle ml-1" style="background:rgba(34,197,94,0.15);padding:2px 6px;border-radius:6px">LIVE</span></div>
-          <div class="text-white/35 text-xs">Pronostica le amichevoli e verifica la classifica con i risultati reali</div>
-        </div>
-        <i class="fa-solid fa-arrow-right text-emerald-400/50 text-sm flex-shrink-0"></i>
-      </button>
-
       <!-- Special predictions strip -->
       <div class="mb-8">
         <!-- Topscorer -->
@@ -722,16 +745,17 @@ function html_dash() {
       <!-- Leghe -->
       ${S.myLeagues.length ? `
       <div class="glass rounded-2xl p-5 mb-8">
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center justify-between mb-1">
           <div class="font-display text-lg text-white tracking-wide"><i class="fa-solid fa-users text-gold mr-2"></i>LE MIE LEGHE</div>
           <button id="btn-manage-leagues" class="text-xs text-gold hover:underline"><i class="fa-solid fa-plus mr-1"></i>Gestisci</button>
         </div>
+        <div class="text-white/35 text-xs mb-4">I pronostici sono indipendenti per ogni lega. Tocca una lega per renderla attiva.</div>
         <div class="grid sm:grid-cols-2 gap-2">
-          ${S.myLeagues.map(lg=>`
-          <button class="league-entry-dash text-left p-3 rounded-lg transition-all hover:border-gold/30" data-lid="${lg.id}" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07)">
-            <div class="text-white text-sm font-semibold">${lg.name}</div>
+          ${S.myLeagues.map(lg=>{const act=lg.id===S.activeLeagueId;return `
+          <button class="league-entry-dash text-left p-3 rounded-lg transition-all hover:border-gold/30" data-lid="${lg.id}" style="background:${act?'rgba(200,164,74,0.1)':'rgba(255,255,255,0.03)'};border:1px solid ${act?'rgba(200,164,74,0.4)':'rgba(255,255,255,0.07)'}">
+            <div class="text-white text-sm font-semibold">${lg.name}${act?' <span class="text-gold text-xs font-bold ml-1"><i class="fa-solid fa-circle-check mr-0.5"></i>attiva</span>':''}</div>
             <div class="text-white/30 text-xs mt-0.5"><i class="fa-solid fa-users mr-1"></i>${lg.member_count} membri</div>
-          </button>`).join('')}
+          </button>`}).join('')}
         </div>
       </div>` : ''}
 
@@ -756,11 +780,13 @@ function html_dash() {
 }
 
 function html_leaderboard_section() {
-  if (!S.leaderboard.length) return '';
+  if (!S.activeLeagueId || !S.leaderboard.length) return '';
+  const lgName = (S.myLeagues.find(l=>l.id===S.activeLeagueId)||{}).name || (S.activeLeague&&S.activeLeague.name) || 'Lega';
   const medal=i=>i===0?'<i class="fa-solid fa-medal text-yellow-400"></i>':i===1?'<i class="fa-solid fa-medal text-slate-300"></i>':i===2?`<i class="fa-solid fa-medal" style="color:#cd7f32"></i>`:`<span class="text-white/25 text-sm w-5 inline-block text-center">${i+1}</span>`;
   return `
   <div class="glass rounded-2xl p-5">
-    <div class="font-display text-lg text-white tracking-wide mb-4"><i class="fa-solid fa-ranking-star text-gold mr-2"></i>CLASSIFICA GLOBALE</div>
+    <div class="font-display text-lg text-white tracking-wide mb-1"><i class="fa-solid fa-ranking-star text-gold mr-2"></i>CLASSIFICA</div>
+    <div class="text-white/35 text-xs mb-4"><i class="fa-solid fa-users mr-1"></i>${lgName}</div>
     <div class="space-y-1">
       ${S.leaderboard.map((u,i)=>`
       <div class="flex items-center gap-3 px-3 py-2.5 rounded-lg ${u.email===S.email?'lb-me':'lb-row'} cursor-pointer lb-click" data-nick="${u.nickname}">
@@ -781,7 +807,6 @@ function bind_dash() {
   if (S._flash) { const msg = S._flash; S._flash = null; showToast(msg); }
   document.getElementById('btn-wc')?.addEventListener('click', () => nav('worldcup'));
   document.getElementById('btn-teams')?.addEventListener('click', () => { S.teamsGroup='A'; S.teamsTeam=null; nav('teams'); });
-  document.getElementById('btn-friendlies')?.addEventListener('click', () => nav('friendlies'));
   document.getElementById('btn-admin-panel')?.addEventListener('click', () => { S._prevView='dashboard'; nav('admin'); });
   document.getElementById('btn-manage-leagues')?.addEventListener('click', () => nav('leagues'));
   document.querySelectorAll('.lb-click').forEach(el => {
@@ -792,8 +817,9 @@ function bind_dash() {
   });
   document.querySelectorAll('.league-entry-dash').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const detail = await api(`/api/leagues/${btn.dataset.lid}`);
-      S.activeLeague=detail; nav('leagueDetail');
+      S.activeLeagueId = btn.dataset.lid;
+      await loadLeagueData();
+      nav('leagueDetail');
     });
   });
 
@@ -841,7 +867,7 @@ function bind_dash() {
       document.querySelectorAll('.ts-player-btn').forEach(btn => {
         btn.addEventListener('click', async () => {
           const name = btn.dataset.name;
-          const res = await api('/api/topscorer',{method:'POST',body:{player:name}});
+          const res = await api('/api/topscorer',{method:'POST',body:lgBody({player:name})});
           if (res.ok) {
             S.topscorer = name;
             document.getElementById('modal-topscorer').classList.add('hidden');
@@ -1221,9 +1247,9 @@ function bind_wc() {
     sub.addEventListener('click', async () => {
       if (!confirm(`⚠️ ATTENZIONE\n\nInvio definitivo pronostici Girone ${S.wcGroup}.\n\nNon potrai più modificarli. Confermi?`)) return;
       sub.innerHTML='<i class="fa-solid fa-spinner spinner mr-2"></i>Invio…'; sub.disabled=true;
-      const res=await api('/api/submit_group',{method:'POST',body:{group:S.wcGroup}});
+      const res=await api('/api/submit_group',{method:'POST',body:lgBody({group:S.wcGroup})});
       if (res.error){alert(res.error);sub.innerHTML=`<i class="fa-solid fa-paper-plane mr-2"></i>Invia Pronostico Girone ${S.wcGroup}`;sub.disabled=false;return;}
-      S.submitted=res.submitted; S.leaderboard=await api('/api/leaderboard'); render();
+      S.submitted=res.submitted; await loadLeagueData(); render();
     });
   }
   bindPredEvents();
@@ -1255,7 +1281,7 @@ async function syncFinalFromBracket(force=false) {
     ((cur.home===bf.home && cur.away===bf.away) || (cur.home===bf.away && cur.away===bf.home));
   // If nothing set yet, or forcing, or teams differ → adopt bracket final
   if (force || !cur.home || !cur.away || !sameTeams || cur.winner!==bf.winner || cur.score!==bf.score) {
-    const body = { home: bf.home, away: bf.away, winner: bf.winner, score: bf.score };
+    const body = lgBody({ home: bf.home, away: bf.away, winner: bf.winner, score: bf.score });
     try {
       const res = await api('/api/final_pred', {method:'POST', body});
       if (res.ok || res.error===undefined) S.finalPred = body;
@@ -1302,7 +1328,7 @@ function bindKoPredEvents() {
     if (inFlight[koid]) return;
     inFlight[koid] = true;
     try {
-      const res = await api('/api/ko_prediction', {method:'POST', body:{matchId:koid, score, adv: prevAdv}});
+      const res = await api('/api/ko_prediction', {method:'POST', body:lgBody({matchId:koid, score, adv: prevAdv})});
       if (res.ok) {
         S.koPred = res.ko_pred || {};
         await syncFinalFromBracket();
@@ -1317,7 +1343,7 @@ function bindKoPredEvents() {
     const cur = S.koPred[koid] || {};
     if (!cur.score) return;
     try {
-      const res = await api('/api/ko_prediction', {method:'POST', body:{matchId:koid, score:cur.score, adv:advTeam}});
+      const res = await api('/api/ko_prediction', {method:'POST', body:lgBody({matchId:koid, score:cur.score, adv:advTeam})});
       if (res.ok) {
         S.koPred = res.ko_pred || {};
         await syncFinalFromBracket();
@@ -1369,7 +1395,7 @@ function bindKoPredEvents() {
       subKo.disabled = true; subKo.innerHTML = '<i class="fa-solid fa-spinner spinner mr-2"></i>Invio…';
       // Push bracket final into PRONOSTICO FINALE before locking
       await syncFinalFromBracket(true);
-      const res = await api('/api/submit_ko', {method:'POST'});
+      const res = await api('/api/submit_ko', {method:'POST', body:lgBody({})});
       if (res.error) { alert(res.error); subKo.disabled=false; return; }
       S.koSubmitted = true;
       render();
@@ -1572,7 +1598,7 @@ function bindPredEvents() {
         + `<span style="color:rgba(255,255,255,0.25)">Salvataggio…</span>`;
 
       try {
-        const res = await api('/api/predictions', {method:'POST', body:{matchId:mid, pick, score}});
+        const res = await api('/api/predictions', {method:'POST', body:lgBody({matchId:mid, pick, score})});
         if (res.ok) {
           S.predictions = res.predictions;
           lastSaved[mid] = score;
@@ -1775,7 +1801,7 @@ function bind_friendlies() {
     const info = card.querySelector('.fr-info-line');
     if (info) info.innerHTML = `<i class="fa-solid fa-spinner spinner mr-1" style="color:rgba(255,255,255,0.25)"></i><span style="color:rgba(255,255,255,0.25)">Salvataggio…</span>`;
     try {
-      const res = await api('/api/predictions', {method:'POST', body:{matchId:mid, pick, score}});
+      const res = await api('/api/predictions', {method:'POST', body:lgBody({matchId:mid, pick, score})});
       if (res.ok) {
         S.predictions = res.predictions;
         [hI,aI].forEach(el=>{ el.style.borderColor='rgba(200,164,74,0.6)'; el.style.color='#C8A44A'; el.style.background='rgba(200,164,74,0.06)'; });
@@ -1981,7 +2007,7 @@ function html_admin() {
         <div class="font-display text-lg text-white tracking-wide mb-4">
           <i class="fa-solid fa-trophy text-gold mr-2"></i>RISULTATI SPECIALI
         </div>
-        <p class="text-white/40 text-sm mb-4">Inserisci il capocannoniere reale e l'esito della finale: assegnano i punti bonus (capocannoniere +5, finalisti +3, finale esatta +5).</p>
+        <p class="text-white/40 text-sm mb-4">Inserisci il capocannoniere reale e le due finaliste: assegnano i punti bonus (capocannoniere +5, entrambe le finaliste +5, una sola finalista +3).</p>
         <div class="space-y-4">
           <div>
             <label class="text-white/50 text-xs uppercase tracking-wider">Capocannoniere del torneo</label>
@@ -2029,7 +2055,7 @@ function html_admin() {
       <!-- Leaderboard overview -->
       <div class="glass rounded-2xl p-5">
         <div class="font-display text-lg text-white tracking-wide mb-4">
-          <i class="fa-solid fa-ranking-star text-gold mr-2"></i>CLASSIFICA GLOBALE
+          <i class="fa-solid fa-ranking-star text-gold mr-2"></i>CLASSIFICA (lega attiva)
         </div>
         ${S.leaderboard.length ? `
         <div class="space-y-1">
@@ -2276,7 +2302,7 @@ function renderAdminMatches() {
       const res = await api('/api/results', {method:'POST', body:{matchId:mid, pick, score}});
       if (res.ok) {
         S.results = await api('/api/results');
-        S.leaderboard = await api('/api/leaderboard');
+        await loadLeagueData();
         btn.innerHTML = '<i class="fa-solid fa-check mr-1"></i>Salvato!';
         btn.style.color = '#86efac';
         setTimeout(() => { btn.innerHTML='<i class="fa-solid fa-floppy-disk mr-1"></i>Salva'; btn.style.color=''; }, 2000);

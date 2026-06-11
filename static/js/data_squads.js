@@ -252,7 +252,7 @@ const WC_SQUADS = {
     starting11:["Alisson","Alex Sandro","Marquinhos","Gabriel","Douglas Santos","Luis Henrique","Casemiro","Bruno Guimaraes","Raphinha","Vinicius Jr","Matheus Cunha"],
     players:[
       {name:"Alisson",pos:'GK',age:33,caps:76,goals:0,assists:1,rating:5,starter:true,club:"Liverpool"},
-      {name:"Ederson (Atalanta)",pos:'GK',age:32,caps:31,goals:0,assists:1,rating:3,starter:false,club:"Fenerbahçe"},
+      {name:"Ederson",pos:'GK',age:32,caps:31,goals:0,assists:1,rating:3,starter:false,club:"Fenerbahçe"},
       {name:"Weverton",pos:'GK',age:38,caps:10,goals:0,assists:0,rating:3,starter:false,club:"Grêmio"},
       {name:"Marquinhos",pos:'DF',age:32,caps:104,goals:7,assists:3,rating:5,starter:true,club:"Paris Saint-Germain"},
       {name:"Danilo",pos:'DF',age:34,caps:68,goals:1,assists:0,rating:3,starter:false,club:"Flamengo"},
@@ -1085,6 +1085,7 @@ const WC_SQUADS = {
       {name:"Paredes",pos:'CC',age:31,caps:58,goals:2,assists:5,rating:3,starter:true,club:"Boca Juniors"},
       {name:"E. Fernandez",pos:'CC',age:24,caps:28,goals:4,assists:6,rating:4,starter:true,club:"Chelsea"},
       {name:"De Paul",pos:'CC',age:31,caps:60,goals:8,assists:12,rating:4,starter:false,club:"Inter Miami"},
+      {name:"Nico Paz",pos:'CC',age:21,caps:4,goals:0,assists:1,rating:4,starter:false,club:"Como"},
       {name:"Messi",pos:'AT',age:38,caps:186,goals:109,assists:57,rating:5,starter:true,club:"Inter Miami"},
       {name:"J. Alvarez",pos:'AT',age:25,caps:40,goals:14,assists:5,rating:5,starter:true,club:"Atletico Madrid"},
       {name:"Almada",pos:'AT',age:25,caps:18,goals:4,assists:4,rating:4,starter:true,club:"Atletico Madrid"},

@@ -105,7 +105,8 @@ async function switchLeague(lid) {
 }
 
 // Body con la lega attiva, per gli endpoint dei pronostici
-function lgBody(b) { return Object.assign({ league: S.activeLeagueId }, b || {}); }
+function curLeagueId() { return S.activeLeagueId || (S.myLeagues[0] && S.myLeagues[0].id) || null; }
+function lgBody(b) { return Object.assign({ league: curLeagueId() }, b || {}); }
 
 async function handleJoinLink() {
   const res = await api(`/api/leagues/join_by_link/${S.joinLid}`, {method:'POST'});
@@ -872,6 +873,8 @@ function bind_dash() {
             S.topscorer = name;
             document.getElementById('modal-topscorer').classList.add('hidden');
             render();
+          } else {
+            showToast(res.error || 'Impossibile salvare il capocannoniere');
           }
         });
       });

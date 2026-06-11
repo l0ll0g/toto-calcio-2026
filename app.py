@@ -125,6 +125,24 @@ FINAL_PRED     = PersistentDict('final_pred')      # email -> {home, away, winne
 # Real outcomes for special bets (admin sets these)
 SPECIAL_RESULTS = PersistentDict('special_results')  # 'topscorer'->name, 'final'->{home,away,winner,score}
 
+# ── Per-league prediction scoping ──────────────────────────────────────
+# I pronostici sono salvati PER LEGA: la chiave dei vari store diventa
+# "<league_id>|<email>", così ogni lega parte da zero e ha pronostici propri.
+LK_SEP = '|'
+def _lk(lid, email):
+    return f"{lid}{LK_SEP}{email}"
+def _split_lk(k):
+    lid, _, em = k.partition(LK_SEP)
+    return lid, em
+def _req_league():
+    """Estrae l'id lega dalla richiesta (query per GET, body per POST)."""
+    if request.method == 'GET':
+        return (request.args.get('league') or '').strip()
+    return ((request.get_json(silent=True) or {}).get('league') or '').strip()
+def _is_member(email, lid):
+    lg = LEAGUES.get(lid)
+    return bool(lg) and email in lg.get('members', [])
+
 
 # Knockout match metadata for Excel export (id -> round label + matchup placeholder)
 WC_KO_META = [
@@ -241,8 +259,6 @@ def register():
     now = datetime.now().strftime('%d/%m/%Y')
     USERS[email]   = {'pw': hash_pw(pw)}
     PROFILES[email]= {'nickname':nickname, 'avatar':avatar, 'created_at':now}
-    PREDICTIONS[email] = {}
-    SUBMITTED[email]   = []
     USER_LEAGUES[email]= []
     session['email']   = email
     return jsonify({'ok':True,'email':email,'nickname':nickname,'avatar':avatar,
@@ -326,12 +342,16 @@ def admin_reset_tokens():
 @login_required
 def get_predictions():
     email = session['email']
-    return jsonify({'predictions':PREDICTIONS.get(email,{}),
-                    'submitted':SUBMITTED.get(email,[]),
-                    'topscorer':TOPSCORER_PRED.get(email,''),
-                    'final_pred':FINAL_PRED.get(email,{}),
-                    'ko_pred':KO_PRED.get(email,{}),
-                    'ko_submitted':KO_SUBMITTED.get(email, False)})
+    lid = _req_league()
+    if not lid or not _is_member(email, lid):
+        return jsonify({'error':'Lega non valida'}), 400
+    k = _lk(lid, email)
+    return jsonify({'predictions':PREDICTIONS.get(k,{}),
+                    'submitted':SUBMITTED.get(k,[]),
+                    'topscorer':TOPSCORER_PRED.get(k,''),
+                    'final_pred':FINAL_PRED.get(k,{}),
+                    'ko_pred':KO_PRED.get(k,{}),
+                    'ko_submitted':KO_SUBMITTED.get(k, False)})
 
 @app.route('/api/ko_prediction', methods=['POST'])
 @login_required
@@ -341,11 +361,15 @@ def set_ko_prediction():
     score    = (d.get('score') or '').strip()
     adv      = (d.get('adv') or '').strip()   # team that advances on a draw (supplementari/rigori)
     email    = session['email']
+    lid      = _req_league()
+    if not lid or not _is_member(email, lid):
+        return jsonify({'error':'Lega non valida'}), 400
+    k = _lk(lid, email)
     if not match_id:
         return jsonify({'error':'matchId mancante'}), 400
     if deadline_passed():
         return jsonify({'error':'Termine scaduto'}), 403
-    if KO_SUBMITTED.get(email, False):
+    if KO_SUBMITTED.get(k, False):
         return jsonify({'error':'Fase ad eliminazione già inviata e bloccata'}), 403
     if score:
         if '-' not in score:
@@ -354,26 +378,29 @@ def set_ko_prediction():
             h, a = map(int, score.split('-', 1))
         except ValueError:
             return jsonify({'error':'Risultato non valido'}), 400
-    if email not in KO_PRED:
-        KO_PRED[email] = {}
+    if k not in KO_PRED:
+        KO_PRED[k] = {}
     if score:
         entry = {'score': score}
         if adv:
             entry['adv'] = adv   # used only when the score is a draw
-        KO_PRED[email][match_id] = entry
-        KO_PRED.save(email)
-    elif match_id in KO_PRED[email]:
-        del KO_PRED[email][match_id]
-        KO_PRED.save(email)
-    return jsonify({'ok':True, 'ko_pred':KO_PRED[email]})
+        KO_PRED[k][match_id] = entry
+        KO_PRED.save(k)
+    elif match_id in KO_PRED[k]:
+        del KO_PRED[k][match_id]
+        KO_PRED.save(k)
+    return jsonify({'ok':True, 'ko_pred':KO_PRED[k]})
 
 @app.route('/api/submit_ko', methods=['POST'])
 @login_required
 def submit_ko():
     email = session['email']
+    lid   = _req_league()
+    if not lid or not _is_member(email, lid):
+        return jsonify({'error':'Lega non valida'}), 400
     if deadline_passed():
         return jsonify({'error':'Termine scaduto'}), 403
-    KO_SUBMITTED[email] = True
+    KO_SUBMITTED[_lk(lid, email)] = True
     return jsonify({'ok':True, 'ko_submitted':True})
 
 
@@ -385,6 +412,10 @@ def set_prediction():
     pick     = d.get('pick','').strip()
     score    = d.get('score','').strip()
     email    = session['email']
+    lid      = _req_league()
+    if not lid or not _is_member(email, lid):
+        return jsonify({'error':'Lega non valida'}), 400
+    k = _lk(lid, email)
 
     if not match_id:
         return jsonify({'error':'matchId mancante'}), 400
@@ -392,15 +423,15 @@ def set_prediction():
     parts = match_id.split('-')
     group = parts[1].upper() if len(parts) >= 2 else None
 
-    if group and group in SUBMITTED.get(email, []):
+    if group and group in SUBMITTED.get(k, []):
         return jsonify({'error': 'Pronostico già inviato per questo girone'}), 403
 
     # Blocco al fischio d'inizio: partita iniziata/in corso/finita = non più pronosticabile
     if match_locked(match_id):
         return jsonify({'error': 'La partita è già iniziata: pronostico bloccato'}), 403
 
-    if email not in PREDICTIONS:
-        PREDICTIONS[email] = {}
+    if k not in PREDICTIONS:
+        PREDICTIONS[k] = {}
 
     # Derive pick from score if not provided
     if score and '-' in score and not pick:
@@ -415,13 +446,13 @@ def set_prediction():
         return jsonify({'error': 'Pick non valido'}), 400
 
     # Save prediction — always overwrite with latest values
-    PREDICTIONS[email][match_id] = {'pick': pick, 'score': score}
-    PREDICTIONS.save(email)
+    PREDICTIONS[k][match_id] = {'pick': pick, 'score': score}
+    PREDICTIONS.save(k)
 
     return jsonify({
         'ok': True,
-        'predictions': PREDICTIONS[email],
-        'submitted': SUBMITTED.get(email, [])
+        'predictions': PREDICTIONS[k],
+        'submitted': SUBMITTED.get(k, [])
     })
 
 @app.route('/api/submit_group', methods=['POST'])
@@ -430,25 +461,33 @@ def submit_group():
     d     = request.json
     group = d.get('group','').upper()
     email = session['email']
+    lid   = _req_league()
+    if not lid or not _is_member(email, lid):
+        return jsonify({'error':'Lega non valida'}), 400
+    k = _lk(lid, email)
     if group not in WC_GROUPS:
         return jsonify({'error':'Girone non valido'}), 400
     if deadline_passed():
         return jsonify({'error':'Termine scaduto!'}), 403
-    if group in SUBMITTED.get(email,[]):
+    if group in SUBMITTED.get(k,[]):
         return jsonify({'error':'Già inviato'}), 409
-    _sub = SUBMITTED.get(email, [])
+    _sub = SUBMITTED.get(k, [])
     if group not in _sub: _sub.append(group)
-    SUBMITTED[email] = _sub
-    return jsonify({'ok':True,'submitted':SUBMITTED[email]})
+    SUBMITTED[k] = _sub
+    return jsonify({'ok':True,'submitted':SUBMITTED[k]})
 
 # ── Top scorer prediction ──────────────────────────────────────────────
 @app.route('/api/topscorer', methods=['POST'])
 @login_required
 def set_topscorer():
     player = request.json.get('player','').strip()
+    email  = session['email']
+    lid    = _req_league()
+    if not lid or not _is_member(email, lid):
+        return jsonify({'error':'Lega non valida'}), 400
     if not player: return jsonify({'error':'Giocatore non valido'}), 400
     if deadline_passed(): return jsonify({'error':'Termine scaduto'}), 403
-    TOPSCORER_PRED[session['email']] = player
+    TOPSCORER_PRED[_lk(lid, email)] = player
     return jsonify({'ok':True,'player':player})
 
 # ── Final prediction ───────────────────────────────────────────────────
@@ -460,12 +499,16 @@ def set_final_pred():
     away   = d.get('away','').strip()
     winner = d.get('winner','').strip()
     score  = d.get('score','').strip()
+    email  = session['email']
+    lid    = _req_league()
+    if not lid or not _is_member(email, lid):
+        return jsonify({'error':'Lega non valida'}), 400
     if not home or not away or not winner:
         return jsonify({'error':'Dati non completi'}), 400
     if home == away:
         return jsonify({'error':'Le due finaliste devono essere diverse'}), 400
     if deadline_passed(): return jsonify({'error':'Termine scaduto'}), 403
-    FINAL_PRED[session['email']] = {'home':home,'away':away,'winner':winner,'score':score}
+    FINAL_PRED[_lk(lid, email)] = {'home':home,'away':away,'winner':winner,'score':score}
     return jsonify({'ok':True})
 
 # ── Results (admin) ────────────────────────────────────────────────────
@@ -635,27 +678,28 @@ def _league_leaderboard(lid):
     board = []
     for email in members:
         p = PROFILES.get(email,{})
-        pts, correct, exact = _calc_points(email)
+        pts, correct, exact = _calc_points(email, lid)
         board.append({'email':email,
                       'nickname':p.get('nickname',email.split('@')[0]),
                       'avatar':p.get('avatar','⚽'),
                       'points':pts,'correct':correct,'exact':exact,
-                      'submitted':len(SUBMITTED.get(email,[]))})
+                      'submitted':len(SUBMITTED.get(_lk(lid, email),[]))})
     board.sort(key=lambda x:-x['points'])
     return board
 
-def _calc_points(email):
-    """Punteggio totale dell'utente.
-    Gironi (PREDICTIONS) + Eliminazione (KO_PRED) confrontati con RESULTS:
-      esatto = 3pt, solo esito 1/X/2 = 1pt.
-    Bonus speciali (SPECIAL_RESULTS):
-      capocannoniere indovinato = +5pt
-      finalisti corretti = +3pt, finale col risultato esatto = +5pt
+def _calc_points(email, lid):
+    """Punteggio dell'utente IN UNA LEGA specifica.
+    Categorie a punti (regolamento aggiornato):
+      • Fase a gironi: risultato esatto = 3pt, solo esito 1/X/2 = 1pt
+      • Capocannoniere indovinato = +5pt
+      • Finale: entrambe le finaliste indovinate = 5pt, una sola = 3pt
+    La fase a eliminazione diretta NON assegna punti.
     Ritorna (punti, esiti_corretti, risultati_esatti)."""
     pts=0; correct=0; exact=0
+    k = _lk(lid, email)
 
-    # 1) Gironi
-    for mid, pred in PREDICTIONS.get(email, {}).items():
+    # 1) Gironi (unica fase di partite a punti)
+    for mid, pred in PREDICTIONS.get(k, {}).items():
         res = RESULTS.get(mid)
         if not res: continue
         if pred.get('score') and pred.get('score') == res.get('score'):
@@ -663,40 +707,22 @@ def _calc_points(email):
         elif pred.get('pick') == res.get('pick'):
             pts+=1; correct+=1
 
-    # 2) Eliminazione diretta
-    for mid, pred in KO_PRED.get(email, {}).items():
-        res = RESULTS.get(mid)
-        if not res or not pred.get('score'): continue
-        ph, pa = (pred['score'].split('-') + ['',''])[:2]
-        rscore = res.get('score','')
-        if pred['score'] == rscore:
-            pts+=3; exact+=1; correct+=1
-        else:
-            # esito (1/X/2) corretto?
-            def _out(s):
-                try:
-                    h,a = map(int, s.split('-')); return '1' if h>a else '2' if a>h else 'X'
-                except Exception: return None
-            if _out(pred['score']) and _out(pred['score']) == _out(rscore):
-                pts+=1; correct+=1
-
-    # 3) Capocannoniere (+5)
+    # 2) Capocannoniere (+5)
     ts_real = SPECIAL_RESULTS.get('topscorer')
-    if ts_real and TOPSCORER_PRED.get(email) == ts_real:
+    if ts_real and TOPSCORER_PRED.get(k) == ts_real:
         pts += 5
 
-    # 4) Finale: finalisti +3, risultato esatto +5
+    # 3) Finale: 2 finaliste giuste = 5pt, 1 sola = 3pt (nessun bonus vincitore)
     fin_real = SPECIAL_RESULTS.get('final')  # {home,away,winner,score}
-    fp = FINAL_PRED.get(email)
+    fp = FINAL_PRED.get(k)
     if fin_real and fp:
-        real_teams = {fin_real.get('home'), fin_real.get('away')}
-        pred_teams = {fp.get('home'), fp.get('away')}
-        if real_teams == pred_teams and None not in real_teams:
+        real_teams = {t for t in (fin_real.get('home'), fin_real.get('away')) if t}
+        pred_teams = {t for t in (fp.get('home'), fp.get('away')) if t}
+        hit = len(real_teams & pred_teams)
+        if hit >= 2:
+            pts += 5
+        elif hit == 1:
             pts += 3
-            if fp.get('score') and fp.get('score') == fin_real.get('score'):
-                pts += 5
-            elif fp.get('winner') and fp.get('winner') == fin_real.get('winner'):
-                pts += 2  # vincitore giusto ma risultato no
 
     return pts, correct, exact
 
@@ -1111,17 +1137,8 @@ def friendly_leaderboard():
 # ── Global leaderboard ─────────────────────────────────────────────────
 @app.route('/api/leaderboard')
 def leaderboard():
-    board=[]
-    for email in PREDICTIONS:
-        p=PROFILES.get(email,{})
-        pts,correct,exact=_calc_points(email)
-        board.append({'email':email,
-                      'nickname':p.get('nickname',email.split('@')[0]),
-                      'avatar':p.get('avatar','⚽'),
-                      'points':pts,'correct':correct,'exact':exact,
-                      'submitted':len(SUBMITTED.get(email,[]))})
-    board.sort(key=lambda x:-x['points'])
-    return jsonify(board[:20])
+    # Classifica globale deprecata: ora le classifiche sono solo per-lega.
+    return jsonify([])
 
 # ── Admin: elenco completo degli utenti registrati ────────────────────
 @app.route('/api/admin/users')
@@ -1131,18 +1148,28 @@ def admin_users():
     users = []
     for email in USERS:
         p = PROFILES.get(email, {})
-        pts, correct, exact = _calc_points(email)
-        leagues = [LEAGUES[lid]['name'] for lid in USER_LEAGUES.get(email, []) if lid in LEAGUES]
+        league_ids = [lid for lid in USER_LEAGUES.get(email, []) if lid in LEAGUES]
+        pts = correct = exact = 0
+        gp = kp = sg = 0; ko_sub = False
+        for lid in league_ids:
+            a,b,c = _calc_points(email, lid)
+            pts+=a; correct+=b; exact+=c
+            k=_lk(lid,email)
+            gp += len(PREDICTIONS.get(k,{}))
+            kp += len(KO_PRED.get(k,{}))
+            sg += len(SUBMITTED.get(k,[]))
+            ko_sub = ko_sub or bool(KO_SUBMITTED.get(k, False))
+        leagues = [LEAGUES[lid]['name'] for lid in league_ids]
         users.append({
             'email': email,
             'nickname': p.get('nickname', email.split('@')[0]),
             'avatar': p.get('avatar', '⚽'),
             'created_at': p.get('created_at', '—'),
             'points': pts, 'correct': correct, 'exact': exact,
-            'group_preds': len(PREDICTIONS.get(email, {})),
-            'ko_preds': len(KO_PRED.get(email, {})),
-            'submitted_groups': len(SUBMITTED.get(email, [])),
-            'ko_submitted': bool(KO_SUBMITTED.get(email, False)),
+            'group_preds': gp,
+            'ko_preds': kp,
+            'submitted_groups': sg,
+            'ko_submitted': ko_sub,
             'leagues': leagues,
             'is_admin': email == ADMIN_EMAIL,
         })
@@ -1154,15 +1181,19 @@ def admin_users():
 def get_profile(nickname):
     for email,p in PROFILES.items():
         if p.get('nickname','').lower() == nickname.lower():
-            pts,correct,exact = _calc_points(email)
-            leagues = [_league_public(lid) for lid in USER_LEAGUES.get(email,[]) if lid in LEAGUES]
+            league_ids = [lid for lid in USER_LEAGUES.get(email,[]) if lid in LEAGUES]
+            pts=correct=exact=0; sg=0
+            for lid in league_ids:
+                a,b,c=_calc_points(email, lid); pts+=a; correct+=b; exact+=c
+                sg += len(SUBMITTED.get(_lk(lid,email),[]))
+            leagues = [_league_public(lid) for lid in league_ids]
             return jsonify({'email':email,'nickname':p['nickname'],
                             'avatar':p.get('avatar','⚽'),
                             'created_at':p.get('created_at','—'),
                             'points':pts,'correct':correct,'exact':exact,
-                            'submitted':len(SUBMITTED.get(email,[])),
-                            'topscorer':TOPSCORER_PRED.get(email,''),
-                            'final_pred':FINAL_PRED.get(email,{}),
+                            'submitted':sg,
+                            'topscorer':'',
+                            'final_pred':{},
                             'leagues':leagues})
     return jsonify({'error':'Profilo non trovato'}), 404
 
@@ -1227,8 +1258,13 @@ def export_excel():
     border    = Border(left=thin, right=thin, top=thin, bottom=thin)
     center    = Alignment(horizontal='center', vertical='center')
     wrap      = Alignment(horizontal='center', vertical='center', wrap_text=True)
-    HEADERS   = ['Email','Nickname','Match ID','Partita','1/X/2','Punteggio','Ris. Reale','Score Reale','Punti','Inviato','Data Export']
-    WIDTHS    = [28, 18, 14, 34, 8, 14, 12, 12, 8, 10, 20]
+    HEADERS   = ['Email','Nickname','Lega','Match ID','Partita','1/X/2','Punteggio','Ris. Reale','Score Reale','Punti','Inviato','Data Export']
+    WIDTHS    = [28, 18, 18, 14, 34, 8, 14, 12, 12, 8, 10, 20]
+    # Coppie (lega, email) da iterare: i pronostici sono per-lega
+    member_pairs = []   # (lid, lname, email)
+    for _lid, _lg in LEAGUES.items():
+        for _em in _lg.get('members', []):
+            member_pairs.append((_lid, _lg.get('name', _lid), _em))
     now_str   = datetime.now().strftime('%d/%m/%Y %H:%M')
 
     # Build match label map  id → "Casa – Ospite"
@@ -1251,13 +1287,14 @@ def export_excel():
             ws.column_dimensions[get_column_letter(col)].width = w
 
         row_i = 3
-        # Include ALL users that have any prediction for this group (submitted or not)
-        for email, preds in sorted(PREDICTIONS.items()):
+        # Include ogni (lega, utente) che ha pronostici per questo girone
+        for lid, lname, email in sorted(member_pairs, key=lambda x:(x[1].lower(), x[2])):
+            preds = PREDICTIONS.get(_lk(lid, email), {})
             grp_preds = {k: v for k, v in preds.items() if k.startswith(f'wc-{grp}-')}
             if not grp_preds:
                 continue
             nick       = PROFILES.get(email, {}).get('nickname', email.split('@')[0])
-            submitted  = grp in SUBMITTED.get(email, [])
+            submitted  = grp in SUBMITTED.get(_lk(lid, email), [])
 
             for mid, pred in sorted(grp_preds.items()):
                 res   = RESULTS.get(mid, {})
@@ -1279,7 +1316,7 @@ def export_excel():
                         pts = 0
                         row_fill = ko_fill
 
-                values = [email, nick, mid, label, pick or '—', score or '—',
+                values = [email, nick, lname, mid, label, pick or '—', score or '—',
                           rp, rs, pts, 'Sì' if submitted else 'No', now_str]
                 # Pick font color based on outcome for readability
                 if pts == 3:    cell_font = data_font_ok
@@ -1296,24 +1333,25 @@ def export_excel():
 
     # ── Summary sheet ──────────────────────────────────────────────────────────
     ws_sum = wb.create_sheet(title="Classifica", index=0)
-    ws_sum.merge_cells('A1:F1')
+    ws_sum.merge_cells('A1:G1')
     c = ws_sum['A1']
-    c.value = f"CLASSIFICA GLOBALE – Esportato {now_str}"
+    c.value = f"CLASSIFICHE PER LEGA – Esportato {now_str}"
     c.fill = ttl_fill; c.font = ttl_font; c.alignment = center
     ws_sum.row_dimensions[1].height = 28
-    sum_headers = ['#', 'Email', 'Nickname', 'Punti', 'Corretti', 'Esatti']
-    sum_widths  = [6, 30, 20, 10, 12, 10]
+    sum_headers = ['#', 'Lega', 'Email', 'Nickname', 'Punti', 'Corretti', 'Esatti']
+    sum_widths  = [6, 18, 30, 20, 10, 12, 10]
     for col, (h, w) in enumerate(zip(sum_headers, sum_widths), 1):
         c = ws_sum.cell(row=2, column=col, value=h)
         c.fill = hdr_fill; c.font = hdr_font; c.alignment = center; c.border = border
         ws_sum.column_dimensions[get_column_letter(col)].width = w
-    leaderboard = sorted(
-        [_calc_points(e) + (e,) for e in USERS],
-        key=lambda x: (-x[0], -x[1])
-    )
-    for i, (pts, correct, exact, email) in enumerate(leaderboard, 1):
+    sum_rows = []
+    for lid, lname, email in member_pairs:
+        pts, correct, exact = _calc_points(email, lid)
+        sum_rows.append((lname, pts, correct, exact, email))
+    sum_rows.sort(key=lambda x: (x[0].lower(), -x[1], -x[2]))
+    for i, (lname, pts, correct, exact, email) in enumerate(sum_rows, 1):
         nick = PROFILES.get(email, {}).get('nickname', email.split('@')[0])
-        row  = [i, email, nick, pts, correct, exact]
+        row  = [i, lname, email, nick, pts, correct, exact]
         fill = alt_fill if i % 2 == 0 else white_fill
         for col, val in enumerate(row, 1):
             c = ws_sum.cell(row=i+2, column=col, value=val)
@@ -1323,27 +1361,28 @@ def export_excel():
 
     # ── Special predictions sheet ──────────────────────────────────────────────
     ws_sp = wb.create_sheet(title="Pronostici Speciali")
-    ws_sp.merge_cells('A1:F1')
+    ws_sp.merge_cells('A1:G1')
     c = ws_sp['A1']
     c.value = "PRONOSTICI SPECIALI – Capocannoniere & Finale"
     c.fill = ttl_fill; c.font = ttl_font; c.alignment = center
-    sp_headers = ['Email', 'Nickname', 'Capocannoniere', 'Finaliste', 'Risultato Finale', 'Vincitore']
-    sp_widths  = [28, 18, 22, 36, 20, 18]
+    sp_headers = ['Lega', 'Email', 'Nickname', 'Capocannoniere', 'Finaliste', 'Risultato Finale', 'Vincitore']
+    sp_widths  = [18, 28, 18, 22, 36, 20, 18]
     for col, (h, w) in enumerate(zip(sp_headers, sp_widths), 1):
         c = ws_sp.cell(row=2, column=col, value=h)
         c.fill = hdr_fill; c.font = hdr_font; c.alignment = center; c.border = border
         ws_sp.column_dimensions[get_column_letter(col)].width = w
     row_i = 3
-    for email in sorted(USERS):
-        ts = TOPSCORER_PRED.get(email, '')
-        fp = FINAL_PRED.get(email, {})
+    for lid, lname, email in sorted(member_pairs, key=lambda x:(x[1].lower(), x[2])):
+        k = _lk(lid, email)
+        ts = TOPSCORER_PRED.get(k, '')
+        fp = FINAL_PRED.get(k, {})
         if not ts and not fp:
             continue
         nick = PROFILES.get(email, {}).get('nickname', email.split('@')[0])
         finaliste = f"{fp.get('home','?')} vs {fp.get('away','?')}" if fp else '—'
         fscore    = fp.get('score', '—') if fp else '—'
         fwin      = fp.get('winner', '—') if fp else '—'
-        values = [email, nick, ts or '—', finaliste, fscore, fwin]
+        values = [lname, email, nick, ts or '—', finaliste, fscore, fwin]
         fill = alt_fill if row_i % 2 == 0 else white_fill
         for col, val in enumerate(values, 1):
             c = ws_sp.cell(row=row_i, column=col, value=val)
@@ -1353,33 +1392,31 @@ def export_excel():
 
     # ── Knockout phase sheet (user's bracket predictions) ──────────────────────
     ws_ko = wb.create_sheet(title="Fase Eliminazione")
-    ws_ko.merge_cells('A1:F1')
+    ws_ko.merge_cells('A1:G1')
     c = ws_ko['A1']
-    c.value = "FASE AD ELIMINAZIONE DIRETTA – Pronostici"
+    c.value = "FASE AD ELIMINAZIONE DIRETTA – Pronostici (senza punti)"
     c.fill = ttl_fill; c.font = ttl_font; c.alignment = center
     ws_ko.row_dimensions[1].height = 28
-    ko_headers = ['Email', 'Nickname', 'Turno', 'Sfida', 'Risultato', 'Qualificata (suppl./rig.)']
-    ko_widths  = [26, 16, 16, 20, 12, 24]
+    ko_headers = ['Lega', 'Email', 'Nickname', 'Turno', 'Sfida', 'Risultato', 'Qualificata (suppl./rig.)']
+    ko_widths  = [18, 26, 16, 16, 20, 12, 24]
     for col, (h, w) in enumerate(zip(ko_headers, ko_widths), 1):
         c = ws_ko.cell(row=2, column=col, value=h)
         c.fill = hdr_fill; c.font = hdr_font; c.alignment = center; c.border = border
         ws_ko.column_dimensions[get_column_letter(col)].width = w
     row_i = 3
-    for email in sorted(USERS):
-        kp = KO_PRED.get(email, {})
+    for lid, lname, email in sorted(member_pairs, key=lambda x:(x[1].lower(), x[2])):
+        kp = KO_PRED.get(_lk(lid, email), {})
         if not kp:
             continue
         nick = PROFILES.get(email, {}).get('nickname', email.split('@')[0])
-        submitted_ko = 'Sì' if KO_SUBMITTED.get(email, False) else 'No'
         for mid, label, matchup in WC_KO_META:
             pred = kp.get(mid)
             if not pred:
                 continue
             score = pred.get('score', '—')
             adv   = pred.get('adv', '')
-            # advancement only meaningful on a draw
             adv_disp = adv if adv else '—'
-            values = [email, nick, label, matchup, score, adv_disp]
+            values = [lname, email, nick, label, matchup, score, adv_disp]
             fill = alt_fill if row_i % 2 == 0 else white_fill
             for col, val in enumerate(values, 1):
                 c = ws_ko.cell(row=row_i, column=col, value=val)

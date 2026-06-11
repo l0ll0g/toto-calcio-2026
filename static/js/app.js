@@ -182,12 +182,160 @@ function render() {
     case 'leagueDetail': root.innerHTML=html_leagueDetail();bind_leagueDetail(); break;
     case 'admin':        root.innerHTML=html_admin();       bind_admin();        break;
     case 'teams':        root.innerHTML=html_teams();       bind_teams();        break;
+    case 'myresults':    root.innerHTML=html_myresults();   bind_myresults();    break;
   }
 }
 
 // ═══════════════════════════════════════════════════════
 // TOPBAR (shared)
 // ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
+// I MIEI RISULTATI — pronostici vs risultato (live + finale)
+// ═══════════════════════════════════════════════════════
+function _mrLiveInfo(mid){
+  const lm = (S.liveState && S.liveState.matches) || {};
+  return lm[mid] || null;
+}
+function _mrPick3(s){
+  const p=(s||'').split('-'); const h=+p[0], a=+p[1];
+  if (isNaN(h)||isNaN(a)) return null;
+  return h>a?'1':a>h?'2':'X';
+}
+function _mrVerdict(m){
+  const pred   = S.predictions[m.id] || {};
+  const result = S.results[m.id];
+  const info   = _mrLiveInfo(m.id);
+  const liveOn = info && (info.status==='IN_PLAY' || info.status==='PAUSED') && info.score && info.score.includes('-');
+  if (result){
+    const scoreOk = pred.score && pred.score===result.score;
+    const pickOk  = pred.pick  && pred.pick===result.pick;
+    return {state:'done', score:result.score||'', cls:scoreOk?'exact':pickOk?'correct':'wrong',
+            label: scoreOk?'Risultato esatto · +3':pickOk?'Esito corretto · +1':'Sbagliato · 0'};
+  }
+  if (liveOn){
+    const lp = _mrPick3(info.score);
+    const scoreOk = pred.score && pred.score===info.score;
+    const pickOk  = pred.pick && lp && pred.pick===lp;
+    return {state:'live', score:info.score, minute:info.minute, cls:scoreOk?'exact':pickOk?'correct':'wrong',
+            label: scoreOk?'Per ora esatto':pickOk?'Per ora esito giusto':'Per ora sbagliato'};
+  }
+  return {state:'todo'};
+}
+function html_myresults(){
+  const hasLeague = !!S.activeLeagueId;
+  const lgName = (S.myLeagues.find(l=>l.id===S.activeLeagueId)||{}).name || 'Nessuna lega';
+  const me = (S.leaderboard||[]).find(u=>u.email===S.email) || {points:0,correct:0,exact:0};
+  const mine = WC_ALL_MATCHES.filter(m => { const p=S.predictions[m.id]; return p && (p.score||p.pick); });
+  const live=[], todo=[], done=[];
+  mine.forEach(m=>{ const v=_mrVerdict(m); (v.state==='live'?live:v.state==='todo'?todo:done).push({m,v}); });
+  const nExact = done.filter(x=>x.v.cls==='exact').length;
+  const nOut   = done.filter(x=>x.v.cls==='correct').length;
+  const nWrong = done.filter(x=>x.v.cls==='wrong').length;
+
+  const scoreChip = (v)=>{
+    if (v.state==='done') return `<span class="font-display text-2xl text-gold">${(v.score||'?-?').replace('-',' – ')}</span><span class="block text-white/25 text-[10px] text-center">finale</span>`;
+    if (v.state==='live') return `<span class="font-display text-2xl" style="color:#22c55e">${v.score.replace('-',' – ')}</span><span class="block text-[10px] text-center" style="color:#22c55e">● LIVE ${v.minute?v.minute+"'":''}</span>`;
+    return `<span class="text-white/20 text-sm font-bold tracking-widest">VS</span>`;
+  };
+  const verdictBadge = (v)=>{
+    if (v.state==='todo') return `<div class="text-white/30 text-xs whitespace-nowrap"><i class="fa-regular fa-clock mr-1"></i>Da giocare</div>`;
+    const map={exact:['badge-exact','fa-star'],correct:['badge-correct','fa-check'],wrong:['badge-wrong','fa-xmark']};
+    const [cls,icon]=map[v.cls];
+    const prov = v.state==='live' ? '' : '';
+    return `<div class="${cls} rounded-lg px-3 py-1.5 flex items-center justify-center gap-2 text-xs font-bold whitespace-nowrap"><i class="fa-solid ${icon}"></i>${v.label}${prov}</div>`;
+  };
+  const card = ({m,v})=>{
+    const pred=S.predictions[m.id]||{};
+    const yourScore = pred.score ? pred.score.replace('-',' – ')
+      : (pred.pick ? ({'1':'Vince '+m.homeTeam.name,'X':'Pareggio','2':'Vince '+m.awayTeam.name})[pred.pick] : '—');
+    return `
+    <div class="glass rounded-xl p-3 mb-2">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-gold text-[11px] font-bold uppercase tracking-wider">${m.group?'Girone '+m.group+' · ':''}${m.round}</span>
+        <span class="text-white/30 text-[11px]"><i class="fa-regular fa-calendar mr-1"></i>${m.date} · ${m.time}</span>
+      </div>
+      <div class="grid items-center gap-2 mb-2" style="grid-template-columns:1fr auto 1fr">
+        <div class="flex items-center gap-2 flex-row-reverse">${flagImg(m.homeTeam.name,20)}<span class="text-white font-semibold text-sm text-right leading-tight">${m.homeTeam.name}</span></div>
+        <div class="px-2 text-center">${scoreChip(v)}</div>
+        <div class="flex items-center gap-2">${flagImg(m.awayTeam.name,20)}<span class="text-white font-semibold text-sm leading-tight">${m.awayTeam.name}</span></div>
+      </div>
+      <div class="flex items-center justify-between gap-2 pt-2" style="border-top:1px solid rgba(255,255,255,0.06)">
+        <div class="text-xs text-white/50"><i class="fa-solid fa-user mr-1 text-gold/60"></i>Tuo pronostico: <strong class="text-white">${yourScore}</strong></div>
+        ${verdictBadge(v)}
+      </div>
+    </div>`;
+  };
+  const section = (title, icon, color, arr) => arr.length ? `
+    <div class="mb-5">
+      <div class="flex items-center gap-2 mb-2"><i class="fa-solid ${icon}" style="color:${color}"></i><span class="font-display text-sm tracking-wide" style="color:${color}">${title} <span class="text-white/30">(${arr.length})</span></span></div>
+      ${arr.map(card).join('')}
+    </div>` : '';
+
+  const specials = hasLeague && mine.length ? `
+    <div class="glass rounded-xl p-4 mt-1">
+      <div class="font-display text-sm text-white tracking-wide mb-3"><i class="fa-solid fa-medal text-gold mr-2"></i>PRONOSTICI SPECIALI</div>
+      <div class="flex items-center justify-between text-sm mb-2"><span class="text-white/50">Capocannoniere</span><span class="text-white font-semibold">${S.topscorer||'—'}</span></div>
+      <div class="flex items-center justify-between text-sm"><span class="text-white/50">Finaliste</span><span class="text-white font-semibold">${(S.finalPred&&S.finalPred.home)?S.finalPred.home+' vs '+S.finalPred.away:'—'}</span></div>
+      <div class="text-white/25 text-[11px] mt-2">Esito assegnato a fine torneo (capocannoniere +5, finale: 2 finaliste +5, una sola +3).</div>
+    </div>` : '';
+
+  const body = !hasLeague
+    ? `<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm">Seleziona prima una lega dalla dashboard.</div>`
+    : !mine.length
+      ? `<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm">Non hai ancora pronostici in questa lega.<br>Vai su <strong class="text-gold">Pronostici Mondiale</strong> per iniziare.</div>`
+      : `
+      <div class="glass rounded-2xl p-4 mb-5">
+        <div class="flex items-center justify-between mb-3 flex-wrap gap-3">
+          <div><div class="text-white/40 text-xs">Punti in ${lgName}</div><div class="font-display text-3xl text-gold leading-none">${me.points}<span class="text-sm text-white/40 ml-1">pt</span></div></div>
+          <div class="flex gap-3 text-center">
+            <div><div class="font-display text-xl" style="color:#22c55e">${nExact}</div><div class="text-white/30 text-[10px]">esatti</div></div>
+            <div><div class="font-display text-xl text-gold">${nOut}</div><div class="text-white/30 text-[10px]">esiti</div></div>
+            <div><div class="font-display text-xl text-red-300">${nWrong}</div><div class="text-white/30 text-[10px]">errati</div></div>
+            <div><div class="font-display text-xl text-white/60">${todo.length}</div><div class="text-white/30 text-[10px]">da giocare</div></div>
+          </div>
+        </div>
+        <div class="text-white/30 text-[11px]"><i class="fa-solid fa-rotate mr-1"></i>Aggiornamento automatico ogni 30s · solo le partite dei gironi assegnano punti.</div>
+      </div>
+      ${section('In corso ora','fa-circle-play','#22c55e',live)}
+      ${section('Da giocare','fa-clock','#9ca3af',todo)}
+      ${section('Conclusi','fa-flag-checkered','#C8A44A',done)}
+      ${specials}`;
+
+  return `
+    ${html_topbar({back:true,title:'I MIEI RISULTATI',subtitle:hasLeague?lgName:''})}
+    <main class="max-w-2xl mx-auto px-4 pb-24 pt-5">
+      ${body}
+    </main>`;
+}
+function bind_myresults(isRefresh){
+  bind_topbar_events();
+  if (!isRefresh){
+    if (S._mrTimer) clearInterval(S._mrTimer);
+    pollMyResults();                 // refresh immediato all'apertura
+    S._mrTimer = setInterval(()=>{
+      if (S.view!=='myresults'){ clearInterval(S._mrTimer); S._mrTimer=null; return; }
+      pollMyResults();
+    }, 30000);
+  }
+}
+async function pollMyResults(){
+  try{
+    const [live,res] = await Promise.all([api('/api/live'), api('/api/results')]);
+    S.liveState = live || {};
+    S.results   = res  || {};
+    if (S.activeLeagueId){
+      const d = await api('/api/leagues/'+encodeURIComponent(S.activeLeagueId));
+      if (d && d.leaderboard) S.leaderboard = d.leaderboard;
+    }
+    if (S.view==='myresults'){
+      const sc = window.scrollY;
+      document.getElementById('app').innerHTML = html_myresults();
+      bind_myresults(true);
+      window.scrollTo(0, sc);
+    }
+  }catch(e){ /* silenzioso */ }
+}
+
 function html_topbar(opts={}) {
   const {back, title, subtitle, rightSlot=''} = opts;
   const onDashboard = S.view === 'dashboard';
@@ -223,7 +371,7 @@ function bind_topbar_events() {
   document.getElementById('btn-back')?.addEventListener('click', () => {
     // Teams detail → teams list; teams list → dashboard
     if (S.view === 'teams' && S.teamsTeam) { S.teamsTeam = null; render(); return; }
-    if (S.view==='worldcup'||S.view==='leagueDetail'||S.view==='teams'||S.view==='admin') nav('dashboard');
+    if (S.view==='worldcup'||S.view==='leagueDetail'||S.view==='teams'||S.view==='admin'||S.view==='myresults') nav('dashboard');
     else if (S.view==='profile') nav(S._prevView||'dashboard');
     else nav('dashboard');
   });
@@ -722,6 +870,18 @@ function html_dash() {
         <i class="fa-solid fa-arrow-right text-gold/50 text-sm flex-shrink-0"></i>
       </button>
 
+      <!-- I miei risultati (pronostici vs live) -->
+      <button id="btn-myresults" class="w-full glass rounded-2xl p-4 mb-5 flex items-center gap-4 hover:border-gold/30 transition-all text-left">
+        <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0" style="background:rgba(200,164,74,0.1);border:1px solid rgba(200,164,74,0.25)">
+          <i class="fa-solid fa-chart-line text-gold text-xl"></i>
+        </div>
+        <div class="flex-1">
+          <div class="font-display text-lg text-white tracking-wide">I MIEI RISULTATI <span class="text-xs align-middle ml-1" style="color:#22c55e;background:rgba(34,197,94,0.12);padding:2px 6px;border-radius:6px">LIVE</span></div>
+          <div class="text-white/35 text-xs">Confronta i tuoi pronostici col risultato in tempo reale</div>
+        </div>
+        <i class="fa-solid fa-arrow-right text-gold/50 text-sm flex-shrink-0"></i>
+      </button>
+
       <!-- Special predictions strip -->
       <div class="mb-8">
         <!-- Topscorer -->
@@ -810,6 +970,7 @@ function bind_dash() {
   document.getElementById('btn-teams')?.addEventListener('click', () => { S.teamsGroup='A'; S.teamsTeam=null; nav('teams'); });
   document.getElementById('btn-admin-panel')?.addEventListener('click', () => { S._prevView='dashboard'; nav('admin'); });
   document.getElementById('btn-manage-leagues')?.addEventListener('click', () => nav('leagues'));
+  document.getElementById('btn-myresults')?.addEventListener('click', () => nav('myresults'));
   document.querySelectorAll('.lb-click').forEach(el => {
     el.addEventListener('click', async () => {
       const data = await api(`/api/profile/${el.dataset.nick}`);

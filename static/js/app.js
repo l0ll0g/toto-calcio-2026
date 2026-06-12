@@ -2298,7 +2298,6 @@ async function loadAdminUsers() {
 function bind_admin() {
   bind_topbar_events();
   loadAdminUsers();
-  bindLiveConfig();
   document.getElementById('admin-users-refresh')?.addEventListener('click', loadAdminUsers);
 
   // ── Risultati speciali (capocannoniere + finale) ──

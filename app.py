@@ -1229,6 +1229,51 @@ def admin_import_predictions():
     return jsonify({'ok': True, 'imported': count, 'groups': sorted(groups),
                     'email': email, 'league': LEAGUES[lid]['name']})
 
+@app.route('/api/admin/league_members')
+@login_required
+@admin_required
+def admin_league_members():
+    lid = (request.args.get('league') or '').strip()
+    if lid not in LEAGUES:
+        return jsonify({'error': 'Lega non valida'}), 400
+    lg = LEAGUES[lid]
+    out = []
+    for em in lg.get('members', []):
+        p = PROFILES.get(em, {})
+        out.append({'email': em,
+                    'nickname': p.get('nickname', em.split('@')[0]),
+                    'avatar': p.get('avatar', '⚽'),
+                    'is_admin': em == lg.get('admin_email')})
+    return jsonify({'league': lg['name'], 'admin_email': lg.get('admin_email'), 'members': out})
+
+@app.route('/api/admin/remove_member', methods=['POST'])
+@login_required
+@admin_required
+def admin_remove_member():
+    d = request.json or {}
+    email = (d.get('email') or '').strip().lower()
+    lid   = (d.get('league') or '').strip()
+    if lid not in LEAGUES:
+        return jsonify({'error': 'Lega non valida'}), 400
+    lg = LEAGUES[lid]
+    if email not in lg.get('members', []):
+        return jsonify({'error': 'Utente non presente in questa lega'}), 400
+    if email == lg.get('admin_email'):
+        return jsonify({'error': 'Non puoi rimuovere il creatore della lega'}), 400
+    # rimuovi dalla lega
+    lg['members'] = [m for m in lg['members'] if m != email]
+    LEAGUES.save(lid)
+    # rimuovi la lega dall'elenco dell'utente
+    ul = USER_LEAGUES.get(email, [])
+    if lid in ul:
+        USER_LEAGUES[email] = [x for x in ul if x != lid]
+    # cancella i suoi pronostici di QUESTA lega (gli altri restano)
+    k = _lk(lid, email)
+    for store in (PREDICTIONS, SUBMITTED, KO_PRED, KO_SUBMITTED, TOPSCORER_PRED, FINAL_PRED):
+        if k in store:
+            del store[k]
+    return jsonify({'ok': True, 'email': email, 'league': lg['name'], 'members': len(lg['members'])})
+
 @app.route('/api/admin/leagues_lookup')
 @login_required
 @admin_required

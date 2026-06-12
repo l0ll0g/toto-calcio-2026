@@ -1181,6 +1181,54 @@ def admin_live_test():
         'error': LIVE_STATE.get('error'),
     })
 
+@app.route('/api/admin/import_predictions', methods=['POST'])
+@login_required
+@admin_required
+def admin_import_predictions():
+    """Ripristina/importa i pronostici dei gironi di un utente in una lega.
+    Utile dopo il passaggio ai pronostici per-lega (vecchi pronostici globali)."""
+    d = request.json or {}
+    email = (d.get('email') or '').strip().lower()
+    lid   = (d.get('league') or '').strip()
+    preds = d.get('predictions') or {}
+    mark_submitted = d.get('submitted', True)
+    if email not in USERS:
+        return jsonify({'error': f'Utente non registrato: {email}'}), 400
+    if lid not in LEAGUES:
+        return jsonify({'error': 'Lega non valida'}), 400
+    if email not in LEAGUES[lid].get('members', []):
+        return jsonify({'error': f'{email} non è membro della lega "{LEAGUES[lid]["name"]}"'}), 400
+    if not isinstance(preds, dict) or not preds:
+        return jsonify({'error': 'Nessun pronostico valido da importare'}), 400
+    k = _lk(lid, email)
+    cur = dict(PREDICTIONS.get(k, {}))
+    groups = set(); count = 0
+    for mid, val in preds.items():
+        if not isinstance(val, dict):
+            continue
+        score = (val.get('score') or '').strip()
+        pick  = (val.get('pick') or '').strip()
+        if pick not in ('1', 'X', '2'):
+            if '-' in score:
+                try:
+                    h, a = map(int, score.split('-', 1))
+                    pick = '1' if h > a else '2' if a > h else 'X'
+                except Exception:
+                    continue
+            else:
+                continue
+        cur[mid] = {'pick': pick, 'score': score}
+        count += 1
+        parts = mid.split('-')
+        if len(parts) >= 2:
+            groups.add(parts[1].upper())
+    PREDICTIONS[k] = cur
+    if mark_submitted and groups:
+        sub = set(SUBMITTED.get(k, [])) | groups
+        SUBMITTED[k] = sorted(sub)
+    return jsonify({'ok': True, 'imported': count, 'groups': sorted(groups),
+                    'email': email, 'league': LEAGUES[lid]['name']})
+
 @app.route('/api/admin/leagues_lookup')
 @login_required
 @admin_required

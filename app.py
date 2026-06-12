@@ -1419,6 +1419,39 @@ def admin_users():
     return jsonify({'count': len(users), 'users': users})
 
 # ── User profile ───────────────────────────────────────────────────────
+@app.route('/api/league_predictions')
+@login_required
+def league_predictions():
+    """Pronostici di un concorrente in una lega, visibili agli altri membri
+    della stessa lega (solo dopo il termine, per evitare di copiare)."""
+    me  = session['email']
+    lid = (request.args.get('league') or '').strip()
+    nick = (request.args.get('nick') or '').strip()
+    if not lid or not _is_member(me, lid):
+        return jsonify({'error': 'Lega non valida'}), 400
+    target = None
+    for em in LEAGUES[lid].get('members', []):
+        if PROFILES.get(em, {}).get('nickname', '').lower() == nick.lower():
+            target = em
+            break
+    if not target:
+        return jsonify({'error': 'Concorrente non trovato in questa lega'}), 404
+    p = PROFILES.get(target, {})
+    pts, correct, exact = _calc_points(target, lid)
+    k = _lk(lid, target)
+    reveal = deadline_passed() or (target == me)
+    return jsonify({
+        'nickname': p.get('nickname', target.split('@')[0]),
+        'avatar': p.get('avatar', '⚽'),
+        'is_me': target == me,
+        'locked': reveal,   # True = pronostici mostrati
+        'points': pts, 'correct': correct, 'exact': exact,
+        'submitted': len(SUBMITTED.get(k, [])),
+        'predictions': PREDICTIONS.get(k, {}) if reveal else {},
+        'topscorer': TOPSCORER_PRED.get(k, '') if reveal else '',
+        'final_pred': FINAL_PRED.get(k, {}) if reveal else {},
+    })
+
 @app.route('/api/profile/<nickname>')
 def get_profile(nickname):
     for email,p in PROFILES.items():

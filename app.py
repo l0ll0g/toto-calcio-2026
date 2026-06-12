@@ -1185,12 +1185,16 @@ def admin_live_test():
 @login_required
 @admin_required
 def admin_import_predictions():
-    """Ripristina/importa i pronostici dei gironi di un utente in una lega.
-    Utile dopo il passaggio ai pronostici per-lega (vecchi pronostici globali)."""
+    """Ripristina/importa i pronostici di un utente in una lega: gironi,
+    eliminazione diretta, capocannoniere e finale.
+    Accetta in 'predictions' o un pacchetto completo
+      {"predictions":{...}, "ko_pred":{...}, "topscorer":"..", "final_pred":{...}}
+    oppure la sola mappa dei gironi {"wc-A-m1":{"pick","score"}, ...}.
+    Capocannoniere/KO/finale possono anche essere passati come campi separati."""
     d = request.json or {}
     email = (d.get('email') or '').strip().lower()
     lid   = (d.get('league') or '').strip()
-    preds = d.get('predictions') or {}
+    payload = d.get('predictions') or {}
     mark_submitted = d.get('submitted', True)
     if email not in USERS:
         return jsonify({'error': f'Utente non registrato: {email}'}), 400
@@ -1198,12 +1202,26 @@ def admin_import_predictions():
         return jsonify({'error': 'Lega non valida'}), 400
     if email not in LEAGUES[lid].get('members', []):
         return jsonify({'error': f'{email} non è membro della lega "{LEAGUES[lid]["name"]}"'}), 400
-    if not isinstance(preds, dict) or not preds:
-        return jsonify({'error': 'Nessun pronostico valido da importare'}), 400
+
+    # Riconosci se 'payload' è un pacchetto completo o la sola mappa gironi
+    group_preds, ko_preds, topscorer, final_pred = {}, {}, None, None
+    if isinstance(payload, dict) and any(key in payload for key in ('predictions', 'ko_pred', 'topscorer', 'final_pred')):
+        group_preds = payload.get('predictions') or {}
+        ko_preds    = payload.get('ko_pred') or {}
+        topscorer   = payload.get('topscorer')
+        final_pred  = payload.get('final_pred')
+    elif isinstance(payload, dict):
+        group_preds = payload
+    # campi separati (hanno priorità se presenti)
+    if d.get('topscorer'):  topscorer  = d.get('topscorer')
+    if d.get('final_pred'): final_pred = d.get('final_pred')
+    if d.get('ko_pred'):    ko_preds   = d.get('ko_pred') or ko_preds
+
     k = _lk(lid, email)
+    # ── Gironi ──
     cur = dict(PREDICTIONS.get(k, {}))
     groups = set(); count = 0
-    for mid, val in preds.items():
+    for mid, val in (group_preds or {}).items():
         if not isinstance(val, dict):
             continue
         score = (val.get('score') or '').strip()
@@ -1222,11 +1240,44 @@ def admin_import_predictions():
         parts = mid.split('-')
         if len(parts) >= 2:
             groups.add(parts[1].upper())
-    PREDICTIONS[k] = cur
+    if count:
+        PREDICTIONS[k] = cur
+
+    # ── Eliminazione diretta ──
+    ko_count = 0
+    if isinstance(ko_preds, dict) and ko_preds:
+        curko = dict(KO_PRED.get(k, {}))
+        for mid, val in ko_preds.items():
+            if not isinstance(val, dict):
+                continue
+            entry = {'score': (val.get('score') or '').strip()}
+            if val.get('adv'):
+                entry['adv'] = val.get('adv')
+            curko[mid] = entry
+            ko_count += 1
+        if ko_count:
+            KO_PRED[k] = curko
+
+    # ── Capocannoniere ──
+    ts_set = False
+    if isinstance(topscorer, str) and topscorer.strip():
+        TOPSCORER_PRED[k] = topscorer.strip(); ts_set = True
+
+    # ── Finale ──
+    fp_set = False
+    if isinstance(final_pred, dict) and final_pred.get('home') and final_pred.get('away'):
+        FINAL_PRED[k] = {'home': final_pred.get('home', ''), 'away': final_pred.get('away', ''),
+                         'winner': final_pred.get('winner', ''), 'score': final_pred.get('score', '')}
+        fp_set = True
+
+    if not (count or ko_count or ts_set or fp_set):
+        return jsonify({'error': 'Nessun pronostico valido da importare'}), 400
+
     if mark_submitted and groups:
         sub = set(SUBMITTED.get(k, [])) | groups
         SUBMITTED[k] = sorted(sub)
     return jsonify({'ok': True, 'imported': count, 'groups': sorted(groups),
+                    'ko': ko_count, 'topscorer': ts_set, 'final': fp_set,
                     'email': email, 'league': LEAGUES[lid]['name']})
 
 @app.route('/api/admin/league_members')

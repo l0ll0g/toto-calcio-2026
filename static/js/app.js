@@ -183,6 +183,7 @@ function render() {
     case 'admin':        root.innerHTML=html_admin();       bind_admin();        break;
     case 'teams':        root.innerHTML=html_teams();       bind_teams();        break;
     case 'myresults':    root.innerHTML=html_myresults();   bind_myresults();    break;
+    case 'competitor':   root.innerHTML=html_competitor();  bind_competitor();   break;
   }
 }
 
@@ -201,8 +202,9 @@ function _mrPick3(s){
   if (isNaN(h)||isNaN(a)) return null;
   return h>a?'1':a>h?'2':'X';
 }
-function _mrVerdict(m){
-  const pred   = S.predictions[m.id] || {};
+function _mrVerdict(m, preds){
+  preds = preds || S.predictions;
+  const pred   = preds[m.id] || {};
   const result = S.results[m.id];
   const info   = _mrLiveInfo(m.id);
   const liveOn = info && (info.status==='IN_PLAY' || info.status==='PAUSED') && info.score && info.score.includes('-');
@@ -221,6 +223,38 @@ function _mrVerdict(m){
   }
   return {state:'todo'};
 }
+function _mrScoreChip(v){
+  if (v.state==='done') return `<span class="font-display text-2xl text-gold">${(v.score||'?-?').replace('-',' – ')}</span><span class="block text-white/25 text-[10px] text-center">finale</span>`;
+  if (v.state==='live') return `<span class="font-display text-2xl" style="color:#22c55e">${v.score.replace('-',' – ')}</span><span class="block text-[10px] text-center" style="color:#22c55e">● LIVE ${v.minute?v.minute+"'":''}</span>`;
+  return `<span class="text-white/20 text-sm font-bold tracking-widest">VS</span>`;
+}
+function _mrVerdictBadge(v){
+  if (v.state==='todo') return `<div class="text-white/30 text-xs whitespace-nowrap"><i class="fa-regular fa-clock mr-1"></i>Da giocare</div>`;
+  const map={exact:['badge-exact','fa-star'],correct:['badge-correct','fa-check'],wrong:['badge-wrong','fa-xmark']};
+  const [cls,icon]=map[v.cls];
+  return `<div class="${cls} rounded-lg px-3 py-1.5 flex items-center justify-center gap-2 text-xs font-bold whitespace-nowrap"><i class="fa-solid ${icon}"></i>${v.label}</div>`;
+}
+function _mrCard(m, v, preds, label){
+  const pred = (preds||S.predictions)[m.id] || {};
+  const yourScore = pred.score ? pred.score.replace('-',' – ')
+    : (pred.pick ? ({'1':'Vince '+m.homeTeam.name,'X':'Pareggio','2':'Vince '+m.awayTeam.name})[pred.pick] : '—');
+  return `
+    <div class="glass rounded-xl p-3 mb-2">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-gold text-[11px] font-bold uppercase tracking-wider">${m.group?'Girone '+m.group+' · ':''}${m.round}</span>
+        <span class="text-white/30 text-[11px]"><i class="fa-regular fa-calendar mr-1"></i>${m.date} · ${m.time}</span>
+      </div>
+      <div class="grid items-center gap-2 mb-2" style="grid-template-columns:1fr auto 1fr">
+        <div class="flex items-center gap-2 flex-row-reverse">${flagImg(m.homeTeam.name,20)}<span class="text-white font-semibold text-sm text-right leading-tight">${m.homeTeam.name}</span></div>
+        <div class="px-2 text-center">${_mrScoreChip(v)}</div>
+        <div class="flex items-center gap-2">${flagImg(m.awayTeam.name,20)}<span class="text-white font-semibold text-sm leading-tight">${m.awayTeam.name}</span></div>
+      </div>
+      <div class="flex items-center justify-between gap-2 pt-2" style="border-top:1px solid rgba(255,255,255,0.06)">
+        <div class="text-xs text-white/50"><i class="fa-solid fa-user mr-1 text-gold/60"></i>${label||'Tuo pronostico'}: <strong class="text-white">${yourScore}</strong></div>
+        ${_mrVerdictBadge(v)}
+      </div>
+    </div>`;
+}
 function html_myresults(){
   const hasLeague = !!S.activeLeagueId;
   const lgName = (S.myLeagues.find(l=>l.id===S.activeLeagueId)||{}).name || 'Nessuna lega';
@@ -232,39 +266,9 @@ function html_myresults(){
   const nOut   = done.filter(x=>x.v.cls==='correct').length;
   const nWrong = done.filter(x=>x.v.cls==='wrong').length;
 
-  const scoreChip = (v)=>{
-    if (v.state==='done') return `<span class="font-display text-2xl text-gold">${(v.score||'?-?').replace('-',' – ')}</span><span class="block text-white/25 text-[10px] text-center">finale</span>`;
-    if (v.state==='live') return `<span class="font-display text-2xl" style="color:#22c55e">${v.score.replace('-',' – ')}</span><span class="block text-[10px] text-center" style="color:#22c55e">● LIVE ${v.minute?v.minute+"'":''}</span>`;
-    return `<span class="text-white/20 text-sm font-bold tracking-widest">VS</span>`;
-  };
-  const verdictBadge = (v)=>{
-    if (v.state==='todo') return `<div class="text-white/30 text-xs whitespace-nowrap"><i class="fa-regular fa-clock mr-1"></i>Da giocare</div>`;
-    const map={exact:['badge-exact','fa-star'],correct:['badge-correct','fa-check'],wrong:['badge-wrong','fa-xmark']};
-    const [cls,icon]=map[v.cls];
-    const prov = v.state==='live' ? '' : '';
-    return `<div class="${cls} rounded-lg px-3 py-1.5 flex items-center justify-center gap-2 text-xs font-bold whitespace-nowrap"><i class="fa-solid ${icon}"></i>${v.label}${prov}</div>`;
-  };
-  const card = ({m,v})=>{
-    const pred=S.predictions[m.id]||{};
-    const yourScore = pred.score ? pred.score.replace('-',' – ')
-      : (pred.pick ? ({'1':'Vince '+m.homeTeam.name,'X':'Pareggio','2':'Vince '+m.awayTeam.name})[pred.pick] : '—');
-    return `
-    <div class="glass rounded-xl p-3 mb-2">
-      <div class="flex items-center justify-between mb-2">
-        <span class="text-gold text-[11px] font-bold uppercase tracking-wider">${m.group?'Girone '+m.group+' · ':''}${m.round}</span>
-        <span class="text-white/30 text-[11px]"><i class="fa-regular fa-calendar mr-1"></i>${m.date} · ${m.time}</span>
-      </div>
-      <div class="grid items-center gap-2 mb-2" style="grid-template-columns:1fr auto 1fr">
-        <div class="flex items-center gap-2 flex-row-reverse">${flagImg(m.homeTeam.name,20)}<span class="text-white font-semibold text-sm text-right leading-tight">${m.homeTeam.name}</span></div>
-        <div class="px-2 text-center">${scoreChip(v)}</div>
-        <div class="flex items-center gap-2">${flagImg(m.awayTeam.name,20)}<span class="text-white font-semibold text-sm leading-tight">${m.awayTeam.name}</span></div>
-      </div>
-      <div class="flex items-center justify-between gap-2 pt-2" style="border-top:1px solid rgba(255,255,255,0.06)">
-        <div class="text-xs text-white/50"><i class="fa-solid fa-user mr-1 text-gold/60"></i>Tuo pronostico: <strong class="text-white">${yourScore}</strong></div>
-        ${verdictBadge(v)}
-      </div>
-    </div>`;
-  };
+  const scoreChip = _mrScoreChip;
+  const verdictBadge = _mrVerdictBadge;
+  const card = ({m,v})=> _mrCard(m, v, S.predictions, 'Tuo pronostico');
   const section = (title, icon, color, arr) => arr.length ? `
     <div class="mb-5">
       <div class="flex items-center gap-2 mb-2"><i class="fa-solid ${icon}" style="color:${color}"></i><span class="font-display text-sm tracking-wide" style="color:${color}">${title} <span class="text-white/30">(${arr.length})</span></span></div>
@@ -336,6 +340,60 @@ async function pollMyResults(){
   }catch(e){ /* silenzioso */ }
 }
 
+function html_competitor(){
+  const d = S.viewedComp;
+  const lgName = (S.myLeagues.find(l=>l.id===S.activeLeagueId)||{}).name || 'Lega';
+  if (!d) {
+    return `${html_topbar({back:true,title:'PROFILO',subtitle:lgName})}<main class="max-w-2xl mx-auto px-4 py-8"><div class="glass rounded-2xl p-6 text-center text-white/40 text-sm">Nessun dato.</div></main>`;
+  }
+  const head = `
+    <div class="glass rounded-2xl p-4 mb-5">
+      <div class="flex items-center gap-3">
+        <div class="text-4xl">${d.avatar}</div>
+        <div class="flex-1 min-w-0">
+          <div class="font-display text-2xl text-white tracking-wide truncate">${d.nickname}${d.is_me?' <span class="text-gold text-xs">(tu)</span>':''}</div>
+          <div class="text-white/35 text-xs">${lgName}</div>
+        </div>
+        <div class="text-right flex-shrink-0">
+          <div class="font-display text-3xl text-gold leading-none">${d.points}<span class="text-sm text-white/40 ml-1">pt</span></div>
+          <div class="text-white/30 text-[10px] mt-0.5">★${d.exact} · ✓${d.correct}</div>
+        </div>
+      </div>
+    </div>`;
+  if (!d.locked) {
+    return `${html_topbar({back:true,title:d.nickname,subtitle:lgName})}
+    <main class="max-w-2xl mx-auto px-4 pb-24 pt-5">
+      ${head}
+      <div class="glass rounded-2xl p-6 text-center text-white/40 text-sm"><i class="fa-solid fa-lock mr-2"></i>I pronostici degli altri concorrenti saranno visibili dopo il termine.</div>
+    </main>`;
+  }
+  const preds = d.predictions || {};
+  const mine = WC_ALL_MATCHES.filter(m => { const p=preds[m.id]; return p && (p.score||p.pick); });
+  const live=[], todo=[], done=[];
+  mine.forEach(m=>{ const v=_mrVerdict(m, preds); (v.state==='live'?live:v.state==='todo'?todo:done).push({m,v}); });
+  const label = d.is_me ? 'Tuo pronostico' : 'Pronostico';
+  const section = (title,icon,color,arr)=> arr.length ? `
+    <div class="mb-5">
+      <div class="flex items-center gap-2 mb-2"><i class="fa-solid ${icon}" style="color:${color}"></i><span class="font-display text-sm tracking-wide" style="color:${color}">${title} <span class="text-white/30">(${arr.length})</span></span></div>
+      ${arr.map(({m,v})=>_mrCard(m,v,preds,label)).join('')}
+    </div>` : '';
+  const specials = `
+    <div class="glass rounded-xl p-4 mt-1">
+      <div class="font-display text-sm text-white tracking-wide mb-3"><i class="fa-solid fa-medal text-gold mr-2"></i>PRONOSTICI SPECIALI</div>
+      <div class="flex items-center justify-between text-sm mb-2"><span class="text-white/50">Capocannoniere</span><span class="text-white font-semibold">${d.topscorer||'—'}</span></div>
+      <div class="flex items-center justify-between text-sm"><span class="text-white/50">Finaliste</span><span class="text-white font-semibold">${(d.final_pred&&d.final_pred.home)?d.final_pred.home+' vs '+d.final_pred.away:'—'}</span></div>
+    </div>`;
+  const body = !mine.length
+    ? `<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm">Nessun pronostico in questa lega.</div>`
+    : `${section('In corso ora','fa-circle-play','#22c55e',live)}${section('Da giocare','fa-clock','#9ca3af',todo)}${section('Conclusi','fa-flag-checkered','#C8A44A',done)}${specials}`;
+  return `${html_topbar({back:true,title:d.nickname,subtitle:lgName})}
+    <main class="max-w-2xl mx-auto px-4 pb-24 pt-5">
+      ${head}
+      ${body}
+    </main>`;
+}
+function bind_competitor(){ bind_topbar_events(); }
+
 function html_topbar(opts={}) {
   const {back, title, subtitle, rightSlot=''} = opts;
   const onDashboard = S.view === 'dashboard';
@@ -371,7 +429,7 @@ function bind_topbar_events() {
   document.getElementById('btn-back')?.addEventListener('click', () => {
     // Teams detail → teams list; teams list → dashboard
     if (S.view === 'teams' && S.teamsTeam) { S.teamsTeam = null; render(); return; }
-    if (S.view==='worldcup'||S.view==='leagueDetail'||S.view==='teams'||S.view==='admin'||S.view==='myresults') nav('dashboard');
+    if (S.view==='worldcup'||S.view==='leagueDetail'||S.view==='teams'||S.view==='admin'||S.view==='myresults'||S.view==='competitor') nav('dashboard');
     else if (S.view==='profile') nav(S._prevView||'dashboard');
     else nav('dashboard');
   });
@@ -980,8 +1038,9 @@ function bind_dash() {
   document.getElementById('btn-myresults')?.addEventListener('click', () => nav('myresults'));
   document.querySelectorAll('.lb-click').forEach(el => {
     el.addEventListener('click', async () => {
-      const data = await api(`/api/profile/${el.dataset.nick}`);
-      S.profileData = data; S._prevView='dashboard'; nav('profile');
+      if (!S.activeLeagueId) return;
+      const data = await api(`/api/league_predictions?league=${encodeURIComponent(S.activeLeagueId)}&nick=${encodeURIComponent(el.dataset.nick)}`);
+      if (data && !data.error) { S.viewedComp = data; S._prevView='dashboard'; nav('competitor'); }
     });
   });
   document.querySelectorAll('.league-entry-dash').forEach(btn => {

@@ -2215,6 +2215,18 @@ function html_admin() {
         <div id="imp-status" class="text-xs mt-2"></div>
       </div>
 
+      <!-- Gestione membri lega -->
+      <div class="glass rounded-2xl p-5 mb-5">
+        <div class="font-display text-lg text-white tracking-wide mb-2"><i class="fa-solid fa-user-minus text-gold mr-2"></i>GESTISCI MEMBRI LEGA</div>
+        <p class="text-white/40 text-sm mb-4">Scegli una lega per vedere i membri e rimuoverli. Rimuovendo un utente vengono cancellati anche i suoi pronostici di quella lega (le altre leghe non vengono toccate).</p>
+        <select id="mem-league" class="w-full px-3 py-2 rounded-lg text-sm mb-3" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff;outline:none">
+          <option value="">— scegli la lega —</option>
+          ${(S.myLeagues||[]).map(l=>`<option value="${l.id}">${l.name}</option>`).join('')}
+        </select>
+        <div id="mem-list" class="space-y-2"></div>
+        <div id="mem-status" class="text-xs mt-2"></div>
+      </div>
+
       <!-- Special results (capocannoniere + finale) -->
       <div class="glass rounded-2xl p-5 mb-5">
         <div class="font-display text-lg text-white tracking-wide mb-4">
@@ -2502,6 +2514,41 @@ function bind_admin() {
       else setStatus(r.error || 'Errore', false);
     } catch(e){ setStatus('Errore di rete', false); }
   });
+
+  // ── Gestisci membri lega (rimozione) ──
+  const memRender = (data) => {
+    const list = document.getElementById('mem-list');
+    if (!list) return;
+    if (!data || !data.members || !data.members.length) { list.innerHTML = '<div class="text-white/30 text-sm">Nessun membro.</div>'; return; }
+    list.innerHTML = data.members.map(m => `
+      <div class="flex items-center gap-2 p-2 rounded-lg" style="background:rgba(255,255,255,0.03)">
+        <span class="text-base">${m.avatar}</span>
+        <div class="flex-1 min-w-0">
+          <div class="text-white text-sm font-semibold truncate">${m.nickname}${m.is_admin?' <span class="text-xs" style="color:#C8A44A">(creatore)</span>':''}</div>
+          <div class="text-white/30 text-xs truncate">${m.email}</div>
+        </div>
+        ${m.is_admin ? '' : `<button class="mem-remove px-3 py-1.5 rounded-lg text-xs font-bold text-red-300 flex-shrink-0" data-email="${m.email}" style="background:rgba(232,25,44,0.12);border:1px solid rgba(232,25,44,0.28)"><i class="fa-solid fa-user-minus mr-1"></i>Rimuovi</button>`}
+      </div>`).join('');
+    document.querySelectorAll('.mem-remove').forEach(b => b.addEventListener('click', async () => {
+      const email = b.dataset.email;
+      const lid = document.getElementById('mem-league').value;
+      const st = document.getElementById('mem-status');
+      if (!confirm(`Rimuovere ${email} dalla lega? I suoi pronostici di questa lega verranno cancellati.`)) return;
+      try {
+        const r = await api('/api/admin/remove_member', {method:'POST', body:{email, league:lid}});
+        if (r.ok) { if(st){ st.textContent = `${email} rimosso (${r.members} membri rimasti).`; st.style.color = '#22c55e'; } memLoad(lid); }
+        else if(st){ st.textContent = r.error || 'Errore'; st.style.color = '#fca5a5'; }
+      } catch(e){ if(st){ st.textContent = 'Errore di rete'; st.style.color = '#fca5a5'; } }
+    }));
+  };
+  async function memLoad(lid) {
+    const list = document.getElementById('mem-list');
+    if (!lid) { if (list) list.innerHTML = ''; return; }
+    if (list) list.innerHTML = '<div class="text-white/30 text-sm"><i class="fa-solid fa-spinner spinner mr-1"></i>Carico…</div>';
+    try { memRender(await api('/api/admin/league_members?league=' + encodeURIComponent(lid))); }
+    catch(e){ if (list) list.innerHTML = '<div class="text-red-300 text-sm">Errore.</div>'; }
+  }
+  document.getElementById('mem-league')?.addEventListener('change', e => memLoad(e.target.value));
 }
 
 function renderAdminMatches() {

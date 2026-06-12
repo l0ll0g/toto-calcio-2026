@@ -2229,25 +2229,6 @@ function html_admin() {
         </div>
       </div>
 
-      <!-- Correzione manuale risultati -->
-      <div class="glass rounded-2xl p-5 mb-5">
-        <div class="font-display text-lg text-white tracking-wide mb-2">
-          <i class="fa-solid fa-pen-to-square text-gold mr-2"></i>CORREGGI RISULTATI
-        </div>
-        <p class="text-white/40 text-sm mb-4">Se la fonte automatica fornisce un risultato sbagliato, correggilo qui. Una volta corretto a mano, l'aggiornamento automatico <strong class="text-gold">non lo tocca più</strong> finché non premi "Sblocca".</p>
-        <div class="space-y-2" id="adm-manual-list">
-          ${(typeof FRIENDLY_MATCHES!=='undefined'?FRIENDLY_MATCHES:[]).map(m=>`
-            <div class="flex items-center gap-2 p-2 rounded-lg" style="background:rgba(255,255,255,0.03)">
-              <span class="text-white/70 text-xs flex-1 truncate">${m.home} - ${m.away}</span>
-              <input class="adm-mr-score" data-mid="${m.id}" type="text" placeholder="es. 3-0" maxlength="5"
-                style="width:64px;height:34px;text-align:center;border-radius:8px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#C8A44A;outline:none;font-size:0.85rem">
-              <button class="adm-mr-save px-3 py-1.5 rounded-lg text-xs font-bold" data-mid="${m.id}" style="background:rgba(200,164,74,0.15);border:1px solid rgba(200,164,74,0.3);color:#C8A44A">Salva</button>
-              <button class="adm-mr-release px-3 py-1.5 rounded-lg text-xs font-bold" data-mid="${m.id}" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.5)">Sblocca</button>
-            </div>`).join('')}
-        </div>
-        <div id="adm-manual-status" class="text-xs mt-2"></div>
-      </div>
-
       <!-- Leaderboard overview -->
       <div class="glass rounded-2xl p-5">
         <div class="font-display text-lg text-white tracking-wide mb-4">
@@ -2345,36 +2326,6 @@ function bind_admin() {
     const r=await api('/api/special_results',{method:'POST',body:{topscorer:v}});
     advStatus(r.ok?`Capocannoniere salvato: ${v||'—'}`:'Errore', !!r.ok);
     await loadUserData();
-  });
-  // Correzione manuale risultati
-  const manualStatus = (msg, ok=true) => {
-    const el = document.getElementById('adm-manual-status');
-    if (el) { el.textContent = msg; el.style.color = ok ? '#22c55e' : '#fca5a5'; }
-  };
-  document.querySelectorAll('.adm-mr-save').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const mid = btn.dataset.mid;
-      const inp = document.querySelector(`.adm-mr-score[data-mid="${mid}"]`);
-      const score = (inp?.value || '').trim();
-      if (!/^\d{1,2}-\d{1,2}$/.test(score)) { manualStatus('Formato punteggio non valido (es. 3-0)', false); return; }
-      try {
-        const r = await api('/api/results', {method:'POST', body:{matchId:mid, score}});
-        if (r.ok) {
-          manualStatus(`Risultato di ${mid} corretto a ${score} e bloccato.`);
-          S.results = await api('/api/results');
-        } else manualStatus(r.error||'Errore', false);
-      } catch(e) { manualStatus('Errore di rete', false); }
-    });
-  });
-  document.querySelectorAll('.adm-mr-release').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const mid = btn.dataset.mid;
-      try {
-        const r = await api('/api/results/release', {method:'POST', body:{matchId:mid}});
-        if (r.ok) manualStatus(`${mid} sbloccato: torna all'aggiornamento automatico.`);
-        else manualStatus(r.error||'Errore', false);
-      } catch(e) { manualStatus('Errore di rete', false); }
-    });
   });
 
   document.getElementById('adm-save-final')?.addEventListener('click', async () => {
@@ -2527,29 +2478,24 @@ function renderAdminMatches() {
     const [rH, rA] = res.score ? res.score.split('-') : ['',''];
     return `
     <div class="p-3 rounded-lg" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08)">
-      <div class="flex items-center gap-2 mb-2">
+      <div class="flex items-center justify-between mb-2">
         <span class="text-white/30 text-xs">${m.date} · ${m.time}</span>
         ${res.score ? `<span class="text-emerald-400 text-xs font-bold"><i class="fa-solid fa-check mr-1"></i>${res.score}</span>` : ''}
       </div>
-      <div class="flex items-center gap-3">
-        <div class="flex items-center gap-1.5 flex-1 justify-end">
-          <span class="text-white text-sm font-semibold">${m.homeTeam.name}</span>
-          ${flagImg(m.homeTeam.name,18)}
-        </div>
-        <div class="flex items-center gap-1.5">
-          <input type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" placeholder="0" value="${rH}"
-            class="score-inp admin-score-h text-center" data-mid="${m.id}" data-side="home"
-            style="width:44px;font-size:1.1rem;font-family:'Bebas Neue',cursive">
-          <span class="text-white/30 font-bold">–</span>
-          <input type="text" inputmode="numeric" pattern="[0-9]" maxlength="1" placeholder="0" value="${rA}"
-            class="score-inp admin-score-a text-center" data-mid="${m.id}" data-side="away"
-            style="width:44px;font-size:1.1rem;font-family:'Bebas Neue',cursive">
-        </div>
-        <div class="flex items-center gap-1.5 flex-1">
-          ${flagImg(m.awayTeam.name,18)}
-          <span class="text-white text-sm font-semibold">${m.awayTeam.name}</span>
-        </div>
-        <button class="btn-save-result px-3 py-1.5 rounded-lg text-xs font-bold text-gold flex-shrink-0" data-mid="${m.id}"
+      <div class="flex items-center justify-center gap-2 mb-3 flex-wrap text-center">
+        <div class="flex items-center gap-1.5">${flagImg(m.homeTeam.name,18)}<span class="text-white text-sm font-semibold">${m.homeTeam.name}</span></div>
+        <span class="text-white/30 text-xs px-1">vs</span>
+        <div class="flex items-center gap-1.5">${flagImg(m.awayTeam.name,18)}<span class="text-white text-sm font-semibold">${m.awayTeam.name}</span></div>
+      </div>
+      <div class="flex items-center justify-center gap-2">
+        <input type="text" inputmode="numeric" pattern="[0-9]" maxlength="2" placeholder="0" value="${rH}"
+          class="score-inp admin-score-h text-center" data-mid="${m.id}" data-side="home"
+          style="width:48px;font-size:1.1rem;font-family:'Bebas Neue',cursive">
+        <span class="text-white/30 font-bold">–</span>
+        <input type="text" inputmode="numeric" pattern="[0-9]" maxlength="2" placeholder="0" value="${rA}"
+          class="score-inp admin-score-a text-center" data-mid="${m.id}" data-side="away"
+          style="width:48px;font-size:1.1rem;font-family:'Bebas Neue',cursive">
+        <button class="btn-save-result px-4 py-2 rounded-lg text-xs font-bold text-gold flex-shrink-0 ml-2" data-mid="${m.id}"
           style="background:rgba(200,164,74,0.12);border:1px solid rgba(200,164,74,0.2)">
           <i class="fa-solid fa-floppy-disk mr-1"></i>Salva
         </button>

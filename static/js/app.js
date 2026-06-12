@@ -2269,6 +2269,15 @@ function html_admin() {
           </select>
           <textarea id="imp-json" rows="5" placeholder='{"predictions":{...}, "ko_pred":{...}, "topscorer":"...", "final_pred":{...}}' class="w-full px-3 py-2 rounded-lg text-xs" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff;outline:none;font-family:monospace"></textarea>
           <input id="imp-topscorer" type="text" placeholder="Capocannoniere (opzionale, se non nel JSON)" class="w-full px-3 py-2 rounded-lg text-sm" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff;outline:none">
+          <div class="text-white/40 text-xs pt-1"><i class="fa-solid fa-crown text-gold/60 mr-1"></i>Finale (opzionale, se non nel JSON)</div>
+          <div class="grid grid-cols-2 gap-2">
+            <input id="imp-final-home" type="text" placeholder="Finalista 1" class="px-3 py-2 rounded-lg text-sm" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff;outline:none">
+            <input id="imp-final-away" type="text" placeholder="Finalista 2" class="px-3 py-2 rounded-lg text-sm" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff;outline:none">
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <input id="imp-final-winner" type="text" placeholder="Vincitore (default: Finalista 1)" class="px-3 py-2 rounded-lg text-sm" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff;outline:none">
+            <input id="imp-final-score" type="text" placeholder="Risultato (es. 2-1)" class="px-3 py-2 rounded-lg text-sm" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff;outline:none">
+          </div>
           <label class="flex items-center gap-2 text-xs text-white/50"><input id="imp-submitted" type="checkbox" checked> Segna i gironi come inviati</label>
           <button id="imp-run" class="w-full px-4 py-2 rounded-lg text-sm font-bold" style="background:rgba(200,164,74,0.15);border:1px solid rgba(200,164,74,0.3);color:#C8A44A"><i class="fa-solid fa-upload mr-1"></i>Importa pronostici</button>
         </div>
@@ -2562,6 +2571,11 @@ function bind_admin() {
     const league  = document.getElementById('imp-league').value;
     const raw     = (document.getElementById('imp-json').value || '').trim();
     const tops    = (document.getElementById('imp-topscorer').value || '').trim();
+    const fHome   = (document.getElementById('imp-final-home').value || '').trim();
+    const fAway   = (document.getElementById('imp-final-away').value || '').trim();
+    const fWin    = (document.getElementById('imp-final-winner').value || '').trim();
+    const fScore  = (document.getElementById('imp-final-score').value || '').trim();
+    const hasFinal = fHome && fAway;
     const submitted = document.getElementById('imp-submitted').checked;
     if (!email)  { setStatus('Inserisci l\'email utente', false); return; }
     if (!league) { setStatus('Scegli la lega', false); return; }
@@ -2569,13 +2583,14 @@ function bind_admin() {
     if (raw) {
       try { preds = JSON.parse(raw); }
       catch(e){ setStatus('JSON non valido: ' + e.message, false); return; }
-    } else if (!tops) {
-      setStatus('Incolla il JSON o almeno il capocannoniere', false); return;
+    } else if (!tops && !hasFinal) {
+      setStatus('Incolla il JSON, oppure compila capocannoniere o finale', false); return;
     }
     setStatus('Importo…', true);
     try {
       const body = {email, league, predictions:preds, submitted};
       if (tops) body.topscorer = tops;
+      if (hasFinal) body.final_pred = {home:fHome, away:fAway, winner:fWin||fHome, score:fScore};
       const r = await api('/api/admin/import_predictions', {method:'POST', body});
       if (r.ok) {
         const parts = [];

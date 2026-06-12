@@ -2198,6 +2198,23 @@ function html_admin() {
         </div>
       </div>
 
+      <!-- Ripristina / importa pronostici utente -->
+      <div class="glass rounded-2xl p-5 mb-5">
+        <div class="font-display text-lg text-white tracking-wide mb-2"><i class="fa-solid fa-rotate-left text-gold mr-2"></i>RIPRISTINA PRONOSTICI</div>
+        <p class="text-white/40 text-sm mb-4">Reinserisci i pronostici dei gironi di un utente in una lega. Incolla il JSON nel formato <span class="text-gold">{"wc-A-m1":{"pick":"1","score":"2-0"}, ...}</span>.</p>
+        <div class="space-y-2">
+          <input id="imp-email" type="text" placeholder="email utente" class="w-full px-3 py-2 rounded-lg text-sm" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff;outline:none">
+          <select id="imp-league" class="w-full px-3 py-2 rounded-lg text-sm" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff;outline:none">
+            <option value="">— scegli la lega —</option>
+            ${(S.myLeagues||[]).map(l=>`<option value="${l.id}">${l.name}</option>`).join('')}
+          </select>
+          <textarea id="imp-json" rows="4" placeholder='{"wc-A-m1":{"pick":"1","score":"2-0"}, ...}' class="w-full px-3 py-2 rounded-lg text-xs" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff;outline:none;font-family:monospace"></textarea>
+          <label class="flex items-center gap-2 text-xs text-white/50"><input id="imp-submitted" type="checkbox" checked> Segna i gironi come inviati</label>
+          <button id="imp-run" class="w-full px-4 py-2 rounded-lg text-sm font-bold" style="background:rgba(200,164,74,0.15);border:1px solid rgba(200,164,74,0.3);color:#C8A44A"><i class="fa-solid fa-upload mr-1"></i>Importa pronostici</button>
+        </div>
+        <div id="imp-status" class="text-xs mt-2"></div>
+      </div>
+
       <!-- Special results (capocannoniere + finale) -->
       <div class="glass rounded-2xl p-5 mb-5">
         <div class="font-display text-lg text-white tracking-wide mb-4">
@@ -2463,6 +2480,27 @@ function bind_admin() {
     if (out) out.innerHTML = '<div class="text-white/40"><i class="fa-solid fa-spinner spinner mr-1"></i>Interrogo la fonte adesso…</div>';
     try { _renderCfgTest(await api('/api/admin/live_test')); }
     catch(e){ if(out) out.innerHTML = '<div class="text-red-300">Errore.</div>'; }
+  });
+
+  // ── Ripristina/importa pronostici ──
+  document.getElementById('imp-run')?.addEventListener('click', async () => {
+    const status = document.getElementById('imp-status');
+    const setStatus = (m, ok=true) => { if(status){ status.textContent = m; status.style.color = ok ? '#22c55e' : '#fca5a5'; } };
+    const email   = (document.getElementById('imp-email').value || '').trim();
+    const league  = document.getElementById('imp-league').value;
+    const raw     = (document.getElementById('imp-json').value || '').trim();
+    const submitted = document.getElementById('imp-submitted').checked;
+    if (!email)  { setStatus('Inserisci l\'email utente', false); return; }
+    if (!league) { setStatus('Scegli la lega', false); return; }
+    let preds;
+    try { preds = JSON.parse(raw); }
+    catch(e){ setStatus('JSON non valido: ' + e.message, false); return; }
+    setStatus('Importo…', true);
+    try {
+      const r = await api('/api/admin/import_predictions', {method:'POST', body:{email, league, predictions:preds, submitted}});
+      if (r.ok) setStatus(`✓ Importati ${r.imported} pronostici per ${r.email} nella lega "${r.league}" (gironi: ${r.groups.join(', ')||'—'}).`);
+      else setStatus(r.error || 'Errore', false);
+    } catch(e){ setStatus('Errore di rete', false); }
   });
 }
 

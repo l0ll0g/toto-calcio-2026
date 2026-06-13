@@ -813,7 +813,62 @@ _REAL_CACHE = {'days': {}, 'details': {}}
 _REAL_DAY_TTL = 300      # 5 min per l'elenco di una giornata
 _REAL_DETAIL_TTL = 120   # 2 min per i dettagli di una partita
 
+def _parse_real_row(m):
+    st = m.get('state') or {}
+    lg = m.get('league') or {}
+    country = lg.get('country')
+    if isinstance(country, dict):
+        country = country.get('name') or ''
+    return {
+        'id': m.get('id'),
+        'home': (m.get('homeTeam') or {}).get('name', ''),
+        'away': (m.get('awayTeam') or {}).get('name', ''),
+        'home_logo': (m.get('homeTeam') or {}).get('logo', ''),
+        'away_logo': (m.get('awayTeam') or {}).get('logo', ''),
+        'score': (st.get('score') or {}).get('current') or '',
+        'status': _hl_status(st.get('description')),
+        'status_raw': st.get('description') or '',
+        'minute': st.get('clock'),
+        'league': lg.get('name') or '',
+        'league_id': str(lg.get('id') or ''),
+        'league_logo': lg.get('logo') or '',
+        'country': country or '',
+        'kickoff': m.get('date') or '',
+    }
+
+def _wc_league_id():
+    """Id della lega Mondiale configurata in 'FONTE LIVE MONDIALE', oppure ''
+    se è ancora il default amichevoli (9294) / non impostata."""
+    wid = str(_cfg_league_id() or '').strip()
+    return wid if wid and wid != '9294' else ''
+
+def _real_league_fixtures(lid):
+    """Tutte le partite della lega 'lid' (stagione configurata), con cache."""
+    key = f"lg:{lid}:{_cfg_season()}"
+    c = _REAL_CACHE['days'].get(key)
+    now = _time.time()
+    if c and now - c['ts'] < _REAL_DAY_TTL:
+        return c['matches']
+    out, offset = [], 0
+    season = _cfg_season()
+    for _ in range(6):  # tetto: ~600 partite (più che sufficiente per un torneo)
+        data = _hl_get_json(f"{HIGHLIGHTLY_BASE}/matches?leagueId={lid}&season={season}&limit=100&offset={offset}")
+        rows = data.get('data', []) or []
+        out.extend(_parse_real_row(m) for m in rows)
+        pag = data.get('pagination') or {}
+        total = pag.get('totalCount', 0)
+        got = len(rows); offset += got
+        if got == 0 or offset >= total:
+            break
+    _REAL_CACHE['days'][key] = {'ts': now, 'matches': out}
+    return out
+
 def _real_day_matches(date_str):
+    # Se è configurata la lega del Mondiale, prendi SOLO quella (filtra per data).
+    wc_id = _wc_league_id()
+    if wc_id:
+        return [m for m in _real_league_fixtures(wc_id) if (m.get('kickoff') or '')[:10] == date_str]
+    # Altrimenti: scansione per data di tutti i campionati (il filtro nome avviene a valle).
     c = _REAL_CACHE['days'].get(date_str)
     now = _time.time()
     if c and now - c['ts'] < _REAL_DAY_TTL:
@@ -823,27 +878,7 @@ def _real_day_matches(date_str):
     for _ in range(4):  # tetto: ~400 partite/giorno
         data = _hl_get_json(f"{HIGHLIGHTLY_BASE}/matches?date={date_str}&season={season}&limit=100&offset={offset}")
         rows = data.get('data', []) or []
-        for m in rows:
-            st = m.get('state') or {}
-            lg = m.get('league') or {}
-            country = lg.get('country')
-            if isinstance(country, dict):
-                country = country.get('name') or ''
-            out.append({
-                'id': m.get('id'),
-                'home': (m.get('homeTeam') or {}).get('name', ''),
-                'away': (m.get('awayTeam') or {}).get('name', ''),
-                'home_logo': (m.get('homeTeam') or {}).get('logo', ''),
-                'away_logo': (m.get('awayTeam') or {}).get('logo', ''),
-                'score': (st.get('score') or {}).get('current') or '',
-                'status': _hl_status(st.get('description')),
-                'status_raw': st.get('description') or '',
-                'minute': st.get('clock'),
-                'league': lg.get('name') or '',
-                'league_logo': lg.get('logo') or '',
-                'country': country or '',
-                'kickoff': m.get('date') or '',
-            })
+        out.extend(_parse_real_row(m) for m in rows)
         pag = data.get('pagination') or {}
         total = pag.get('totalCount', 0)
         got = len(rows); offset += got
@@ -1232,15 +1267,33 @@ def api_live():
         'poll_seconds': LIVE_POLL_SECONDS,
     })
 
+def _is_wc_match(m):
+    """True se la partita è della Coppa del Mondo (esclude U20/U17/femminile/club/
+    qualificazioni). Se l'admin ha impostato un league_id specifico per il Mondiale
+    nella config live, usa quello come criterio principale."""
+    name = (m.get('league') or '').lower()
+    lid  = str(m.get('league_id') or '')
+    cfg_id = str(_cfg_league_id() or '')
+    if cfg_id and cfg_id not in ('', '9294') and lid and lid == cfg_id:
+        return True
+    if 'world cup' not in name and 'coppa del mondo' not in name and 'mondiali' not in name:
+        return False
+    bad = ('u20', 'u-20', 'u23', 'u-23', 'u17', 'u-17', 'u19', 'u-19',
+           'women', 'femmin', 'club', 'beach', 'futsal', 'qualif')
+    return not any(b in name for b in bad)
+
 @app.route('/api/real_matches')
 @login_required
 def api_real_matches():
-    """Elenco delle partite reali di una giornata (qualsiasi campionato)."""
+    """Elenco delle partite del MONDIALE di una giornata (con risultati)."""
     if not LIVE_ENABLED:
         return jsonify({'error': 'Fonte non configurata (HIGHLIGHTLY_KEY mancante)', 'matches': []})
     date_str = (request.args.get('date') or datetime.now(timezone.utc).date().isoformat()).strip()
     try:
-        return jsonify({'date': date_str, 'matches': _real_day_matches(date_str)})
+        allm = _real_day_matches(date_str)
+        if not _wc_league_id():
+            allm = [m for m in allm if _is_wc_match(m)]
+        return jsonify({'date': date_str, 'matches': allm, 'configured': bool(_wc_league_id())})
     except Exception as e:
         return jsonify({'date': date_str, 'matches': [], 'error': 'Fonte non raggiungibile: ' + str(e)})
 

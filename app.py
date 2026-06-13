@@ -967,9 +967,10 @@ def _parse_match_events(raw):
             elif side == 'away': a += 1
             score = f"{h}-{a}"
         elif kind == 'owngoal':
-            # l'autorete vale per l'ALTRA squadra: la mostriamo sul lato che segna
-            if side == 'home': a += 1; side = 'away'
-            elif side == 'away': h += 1; side = 'home'
+            # l'autorete è già attribuita dalla fonte alla squadra che ne beneficia:
+            # la accreditiamo e la mostriamo su QUEL lato (senza ribaltare).
+            if side == 'home': h += 1
+            elif side == 'away': a += 1
             score = f"{h}-{a}"
         ev = {'minute': minute, 'half': _half_of(minute), 'kind': kind,
               'side': side or 'home', 'player': player, 'assist': assist,

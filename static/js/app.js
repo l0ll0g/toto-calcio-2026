@@ -471,7 +471,7 @@ function html_realmatches(){
   } else if(data.loading){
     body=`<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm"><i class="fa-solid fa-spinner spinner mr-2"></i>Carico le partite…</div>`;
   } else if(!matches.length){
-    body=`<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm">Nessuna partita trovata per questa data.</div>`;
+    body=`<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm">Nessuna partita del Mondiale in questa data.</div>`;
   } else {
     const byLeague={};
     matches.forEach(m=>{ const key=(m.country?m.country+' · ':'')+(m.league||'—'); (byLeague[key]=byLeague[key]||[]).push(m); });
@@ -506,10 +506,14 @@ function html_realmatches(){
         ${byLeague[lg].map(matchRow).join('')}
       </div>`).join('');
   }
+  const hint = (data.configured===false && !data.loading && !data.error)
+    ? `<div class="text-white/30 text-[11px] mb-3 px-1"><i class="fa-solid fa-circle-info mr-1"></i>Per agganciare con precisione il Mondiale, imposta la lega in <strong class="text-white/50">Admin → Fonte live Mondiale</strong>.</div>`
+    : '';
   return `
-    ${html_topbar({back:true,title:'PARTITE REALI',subtitle:'Risultati e dettagli'})}
+    ${html_topbar({back:true,title:'PARTITE MONDIALE',subtitle:'Risultati e dettagli'})}
     <main class="max-w-2xl mx-auto px-4 pb-24 pt-4">
       ${dateNav}
+      ${hint}
       ${body}
     </main>`;
 }
@@ -1088,7 +1092,7 @@ function html_dash() {
           <i class="fa-solid fa-futbol text-xl" style="color:#60a5fa"></i>
         </div>
         <div class="flex-1">
-          <div class="font-display text-lg text-white tracking-wide">PARTITE REALI</div>
+          <div class="font-display text-lg text-white tracking-wide">PARTITE MONDIALE</div>
           <div class="text-white/35 text-xs">Risultati veri giorno per giorno: marcatori, assist, ammoniti, espulsi</div>
         </div>
         <i class="fa-solid fa-arrow-right text-gold/50 text-sm flex-shrink-0"></i>

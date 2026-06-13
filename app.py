@@ -825,7 +825,7 @@ def _parse_real_row(m):
         'away': (m.get('awayTeam') or {}).get('name', ''),
         'home_logo': (m.get('homeTeam') or {}).get('logo', ''),
         'away_logo': (m.get('awayTeam') or {}).get('logo', ''),
-        'score': (st.get('score') or {}).get('current') or '',
+        'score': ((st.get('score') or {}).get('current') or '').replace(' ', ''),
         'status': _hl_status(st.get('description')),
         'status_raw': st.get('description') or '',
         'minute': st.get('clock'),
@@ -837,54 +837,33 @@ def _parse_real_row(m):
     }
 
 def _wc_league_id():
-    """Id della lega Mondiale configurata in 'FONTE LIVE MONDIALE', oppure ''
-    se è ancora il default amichevoli (9294) / non impostata."""
+    """Id della lega del Mondiale. Se l'admin ne ha impostata una in 'FONTE LIVE
+    MONDIALE' (diversa dalle amichevoli 9294) usa quella, altrimenti il default
+    noto della Coppa del Mondo 2026 su Highlightly: 1635."""
     wid = str(_cfg_league_id() or '').strip()
-    return wid if wid and wid != '9294' else ''
+    if wid and wid != '9294':
+        return wid
+    return '1635'
 
-def _real_league_fixtures(lid):
-    """Tutte le partite della lega 'lid' (stagione configurata), con cache."""
-    key = f"lg:{lid}:{_cfg_season()}"
+def _real_day_matches(date_str):
+    """Partite del Mondiale (lega WC) in una certa data."""
+    wc_id = _wc_league_id()
+    key = f"{wc_id}:{date_str}"
     c = _REAL_CACHE['days'].get(key)
     now = _time.time()
     if c and now - c['ts'] < _REAL_DAY_TTL:
         return c['matches']
     out, offset = [], 0
-    season = _cfg_season()
-    for _ in range(6):  # tetto: ~600 partite (più che sufficiente per un torneo)
-        data = _hl_get_json(f"{HIGHLIGHTLY_BASE}/matches?leagueId={lid}&season={season}&limit=100&offset={offset}")
-        rows = data.get('data', []) or []
+    for _ in range(3):
+        data = _hl_get_json(f"{HIGHLIGHTLY_BASE}/matches?leagueId={wc_id}&date={date_str}&timezone=Etc/UTC&limit=100&offset={offset}")
+        rows = (data.get('data') if isinstance(data, dict) else data) or []
         out.extend(_parse_real_row(m) for m in rows)
-        pag = data.get('pagination') or {}
+        pag = (data.get('pagination') if isinstance(data, dict) else None) or {}
         total = pag.get('totalCount', 0)
         got = len(rows); offset += got
         if got == 0 or offset >= total:
             break
     _REAL_CACHE['days'][key] = {'ts': now, 'matches': out}
-    return out
-
-def _real_day_matches(date_str):
-    # Se è configurata la lega del Mondiale, prendi SOLO quella (filtra per data).
-    wc_id = _wc_league_id()
-    if wc_id:
-        return [m for m in _real_league_fixtures(wc_id) if (m.get('kickoff') or '')[:10] == date_str]
-    # Altrimenti: scansione per data di tutti i campionati (il filtro nome avviene a valle).
-    c = _REAL_CACHE['days'].get(date_str)
-    now = _time.time()
-    if c and now - c['ts'] < _REAL_DAY_TTL:
-        return c['matches']
-    out, offset = [], 0
-    season = _cfg_season()
-    for _ in range(4):  # tetto: ~400 partite/giorno
-        data = _hl_get_json(f"{HIGHLIGHTLY_BASE}/matches?date={date_str}&season={season}&limit=100&offset={offset}")
-        rows = data.get('data', []) or []
-        out.extend(_parse_real_row(m) for m in rows)
-        pag = data.get('pagination') or {}
-        total = pag.get('totalCount', 0)
-        got = len(rows); offset += got
-        if got == 0 or offset >= total:
-            break
-    _REAL_CACHE['days'][date_str] = {'ts': now, 'matches': out}
     return out
 
 def _ev_name(x):
@@ -893,16 +872,16 @@ def _ev_name(x):
     return x or ''
 
 def _is_event_item(x):
+    """Vero solo per eventi-partita veri (Goal/Card/Substitution/...),
+    così da non confondere shots/predictions/statistiche."""
     if not isinstance(x, dict):
         return False
-    if x.get('type') or x.get('eventType'):
-        return True
-    has_player = any(x.get(k) for k in ('player', 'scorer', 'playerName'))
-    has_time   = any(k in x for k in ('time', 'minute', 'elapsed', 'clock'))
-    return bool(has_player and has_time)
+    t = str(x.get('type') or '').strip().lower()
+    if not t or t in ('live', 'prematch'):
+        return False
+    return ('goal' in t or 'card' in t or 'subst' in t or 'penalty' in t or t == 'var')
 
 def _collect_event_lists(obj, depth=0, acc=None):
-    """Trova ricorsivamente le liste di 'eventi' ovunque nella risposta."""
     if acc is None:
         acc = []
     if depth > 6:
@@ -919,43 +898,44 @@ def _collect_event_lists(obj, depth=0, acc=None):
     return acc
 
 def _parse_match_events(raw):
-    """Estrae marcatori/assist/ammoniti/espulsi dal dettaglio partita, in modo
-    difensivo: prima prova le chiavi note, poi cerca eventi ovunque."""
+    """Estrae marcatori/assist/ammoniti/espulsi dal dettaglio partita Highlightly.
+    Il dettaglio è un array [ {match...} ] con dentro 'events':
+      {team:{name,logo}, time:"40", type:"Goal"|"Yellow Card"|"Red Card"|
+       "Substitution"|"Missed Penalty", player:"S. Gimenez", assist:"E. Alvarez"}
+    """
     m = raw
-    if isinstance(raw, dict) and isinstance(raw.get('data'), (dict, list)):
-        dd = raw['data']
-        m = (dd[0] if (isinstance(dd, list) and dd) else dd) if dd else raw
-    events = []
-    if isinstance(m, dict):
-        events = m.get('events') or (m.get('state') or {}).get('events') or m.get('timeline') or []
-        events = [e for e in events if _is_event_item(e)]
-    if not events:
+    if isinstance(m, list):
+        m = m[0] if m else {}
+    if isinstance(m, dict) and isinstance(m.get('data'), (dict, list)):
+        dd = m['data']
+        m = (dd[0] if (isinstance(dd, list) and dd) else dd) if dd else m
+    events = (m.get('events') if isinstance(m, dict) else None) or []
+    events = [e for e in events if _is_event_item(e)]
+    if not events:  # ultima spiaggia: cerca ovunque
         lists = _collect_event_lists(raw)
         if lists:
             events = max(lists, key=len)
     goals, yellow, red = [], [], []
-    for e in events or []:
+    for e in events:
         if not isinstance(e, dict):
             continue
-        etype  = str(e.get('type') or e.get('eventType') or '').lower()
-        detail = str(e.get('detail') or e.get('description') or e.get('card') or e.get('subType') or '').lower()
-        minute = e.get('time') or e.get('minute') or e.get('clock') or e.get('elapsed') or ''
+        t = str(e.get('type') or '').strip().lower()
+        minute = e.get('time') or e.get('minute') or e.get('elapsed') or ''
         if isinstance(minute, dict):
-            minute = minute.get('elapsed') or minute.get('current') or minute.get('minute') or ''
-        player = _ev_name(e.get('player') or e.get('scorer') or e.get('playerName') or e.get('playerOut'))
-        assist = _ev_name(e.get('assist') or e.get('assistPlayer') or e.get('assistName'))
+            minute = minute.get('elapsed') or minute.get('current') or ''
+        minute = str(minute).replace("'", "").strip()
+        player = _ev_name(e.get('player') or e.get('scorer') or e.get('playerName'))
+        assist = _ev_name(e.get('assist'))
         team   = _ev_name(e.get('team') or e.get('teamName'))
-        blob = etype + ' ' + detail
-        if 'subst' in blob or 'substitution' in blob or etype == 'var':
+        if 'subst' in t or 'missed' in t or t == 'var':
             continue
-        if 'goal' in blob:
-            note = 'rig.' if ('pen' in blob) else ('aut.' if 'own' in blob else '')
+        if 'goal' in t:
+            note = 'aut.' if 'own' in t else ('rig.' if 'pen' in t else '')
             goals.append({'player': player, 'assist': assist, 'minute': minute, 'team': team, 'note': note})
-        elif 'card' in blob or 'yellow' in blob or 'red' in blob or 'booking' in blob:
-            if 'red' in blob or 'second yellow' in blob or 'sent off' in blob:
-                red.append({'player': player, 'minute': minute, 'team': team})
-            else:
-                yellow.append({'player': player, 'minute': minute, 'team': team})
+        elif 'red' in t:
+            red.append({'player': player, 'minute': minute, 'team': team})
+        elif 'yellow' in t or 'card' in t:
+            yellow.append({'player': player, 'minute': minute, 'team': team})
     return {'goals': goals, 'yellow': yellow, 'red': red,
             'available': bool(goals or yellow or red)}
 
@@ -966,8 +946,7 @@ def _real_match_detail(mid):
         return c['data']
     data = {'available': False, 'goals': [], 'yellow': [], 'red': []}
     for url in (f"{HIGHLIGHTLY_BASE}/matches/{mid}",
-                f"{HIGHLIGHTLY_BASE}/matches/{mid}/events",
-                f"{HIGHLIGHTLY_BASE}/events?matchId={mid}"):
+                f"{HIGHLIGHTLY_BASE}/events/{mid}"):
         try:
             parsed = _parse_match_events(_hl_get_json(url))
             if parsed.get('available'):
@@ -1329,9 +1308,7 @@ def api_real_matches():
     date_str = (request.args.get('date') or datetime.now(timezone.utc).date().isoformat()).strip()
     try:
         allm = _real_day_matches(date_str)
-        if not _wc_league_id():
-            allm = [m for m in allm if _is_wc_match(m)]
-        return jsonify({'date': date_str, 'matches': allm, 'configured': bool(_wc_league_id())})
+        return jsonify({'date': date_str, 'matches': allm, 'configured': True, 'league_id': _wc_league_id()})
     except Exception as e:
         return jsonify({'date': date_str, 'matches': [], 'error': 'Fonte non raggiungibile: ' + str(e)})
 

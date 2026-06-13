@@ -889,12 +889,38 @@ def _real_day_matches(date_str):
 
 def _ev_name(x):
     if isinstance(x, dict):
-        return x.get('name') or x.get('player') or x.get('fullName') or ''
+        return x.get('name') or x.get('player') or x.get('fullName') or x.get('displayName') or ''
     return x or ''
+
+def _is_event_item(x):
+    if not isinstance(x, dict):
+        return False
+    if x.get('type') or x.get('eventType'):
+        return True
+    has_player = any(x.get(k) for k in ('player', 'scorer', 'playerName'))
+    has_time   = any(k in x for k in ('time', 'minute', 'elapsed', 'clock'))
+    return bool(has_player and has_time)
+
+def _collect_event_lists(obj, depth=0, acc=None):
+    """Trova ricorsivamente le liste di 'eventi' ovunque nella risposta."""
+    if acc is None:
+        acc = []
+    if depth > 6:
+        return acc
+    if isinstance(obj, list):
+        ev = [x for x in obj if _is_event_item(x)]
+        if ev:
+            acc.append(ev)
+        for x in obj:
+            _collect_event_lists(x, depth + 1, acc)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            _collect_event_lists(v, depth + 1, acc)
+    return acc
 
 def _parse_match_events(raw):
     """Estrae marcatori/assist/ammoniti/espulsi dal dettaglio partita, in modo
-    difensivo (la struttura esatta può variare)."""
+    difensivo: prima prova le chiavi note, poi cerca eventi ovunque."""
     m = raw
     if isinstance(raw, dict) and isinstance(raw.get('data'), (dict, list)):
         dd = raw['data']
@@ -902,27 +928,36 @@ def _parse_match_events(raw):
     events = []
     if isinstance(m, dict):
         events = m.get('events') or (m.get('state') or {}).get('events') or m.get('timeline') or []
+        events = [e for e in events if _is_event_item(e)]
+    if not events:
+        lists = _collect_event_lists(raw)
+        if lists:
+            events = max(lists, key=len)
     goals, yellow, red = [], [], []
     for e in events or []:
         if not isinstance(e, dict):
             continue
-        etype  = (e.get('type') or e.get('eventType') or '').lower()
-        detail = (e.get('detail') or e.get('description') or e.get('card') or e.get('subType') or '').lower()
+        etype  = str(e.get('type') or e.get('eventType') or '').lower()
+        detail = str(e.get('detail') or e.get('description') or e.get('card') or e.get('subType') or '').lower()
         minute = e.get('time') or e.get('minute') or e.get('clock') or e.get('elapsed') or ''
         if isinstance(minute, dict):
-            minute = minute.get('elapsed') or minute.get('current') or ''
+            minute = minute.get('elapsed') or minute.get('current') or minute.get('minute') or ''
         player = _ev_name(e.get('player') or e.get('scorer') or e.get('playerName') or e.get('playerOut'))
         assist = _ev_name(e.get('assist') or e.get('assistPlayer') or e.get('assistName'))
         team   = _ev_name(e.get('team') or e.get('teamName'))
-        if 'goal' in etype or 'goal' in detail:
-            note = 'rig.' if 'pen' in detail else ('aut.' if 'own' in detail else '')
+        blob = etype + ' ' + detail
+        if 'subst' in blob or 'substitution' in blob or etype == 'var':
+            continue
+        if 'goal' in blob:
+            note = 'rig.' if ('pen' in blob) else ('aut.' if 'own' in blob else '')
             goals.append({'player': player, 'assist': assist, 'minute': minute, 'team': team, 'note': note})
-        elif 'card' in etype or 'card' in detail or etype in ('yellowcard', 'redcard', 'yellow', 'red'):
-            if 'red' in detail or 'red' in etype:
+        elif 'card' in blob or 'yellow' in blob or 'red' in blob or 'booking' in blob:
+            if 'red' in blob or 'second yellow' in blob or 'sent off' in blob:
                 red.append({'player': player, 'minute': minute, 'team': team})
-            elif 'yellow' in detail or 'yellow' in etype:
+            else:
                 yellow.append({'player': player, 'minute': minute, 'team': team})
-    return {'goals': goals, 'yellow': yellow, 'red': red, 'available': bool(events)}
+    return {'goals': goals, 'yellow': yellow, 'red': red,
+            'available': bool(goals or yellow or red)}
 
 def _real_match_detail(mid):
     c = _REAL_CACHE['details'].get(mid)
@@ -930,10 +965,13 @@ def _real_match_detail(mid):
     if c and now - c['ts'] < _REAL_DETAIL_TTL:
         return c['data']
     data = {'available': False, 'goals': [], 'yellow': [], 'red': []}
-    for url in (f"{HIGHLIGHTLY_BASE}/matches/{mid}", f"{HIGHLIGHTLY_BASE}/events?matchId={mid}"):
+    for url in (f"{HIGHLIGHTLY_BASE}/matches/{mid}",
+                f"{HIGHLIGHTLY_BASE}/matches/{mid}/events",
+                f"{HIGHLIGHTLY_BASE}/events?matchId={mid}"):
         try:
-            data = _parse_match_events(_hl_get_json(url))
-            if data.get('available'):
+            parsed = _parse_match_events(_hl_get_json(url))
+            if parsed.get('available'):
+                data = parsed
                 break
         except Exception:
             continue

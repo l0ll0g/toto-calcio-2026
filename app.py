@@ -897,47 +897,94 @@ def _collect_event_lists(obj, depth=0, acc=None):
             _collect_event_lists(v, depth + 1, acc)
     return acc
 
+def _side_of(team, home_id, away_id, home_n, away_n):
+    tid = team.get('id') if isinstance(team, dict) else None
+    tname = team.get('name') if isinstance(team, dict) else team
+    if tid is not None:
+        if home_id is not None and str(tid) == str(home_id): return 'home'
+        if away_id is not None and str(tid) == str(away_id): return 'away'
+    n = _norm(tname or '')
+    if n and n == home_n: return 'home'
+    if n and n == away_n: return 'away'
+    return ''
+
+def _half_of(minute_str):
+    try:
+        base = int(str(minute_str).split('+')[0])
+    except Exception:
+        base = 0
+    return 1 if base <= 45 else 2
+
 def _parse_match_events(raw):
-    """Estrae marcatori/assist/ammoniti/espulsi dal dettaglio partita Highlightly.
-    Il dettaglio è un array [ {match...} ] con dentro 'events':
-      {team:{name,logo}, time:"40", type:"Goal"|"Yellow Card"|"Red Card"|
-       "Substitution"|"Missed Penalty", player:"S. Gimenez", assist:"E. Alvarez"}
-    """
+    """Costruisce la timeline eventi del dettaglio partita Highlightly:
+    gol, autogol, rigori, ammonizioni, espulsioni, sostituzioni, VAR — con
+    lato (casa/ospite), assist/sostituito e punteggio progressivo."""
     m = raw
     if isinstance(m, list):
         m = m[0] if m else {}
     if isinstance(m, dict) and isinstance(m.get('data'), (dict, list)):
         dd = m['data']
         m = (dd[0] if (isinstance(dd, list) and dd) else dd) if dd else m
-    events = (m.get('events') if isinstance(m, dict) else None) or []
-    events = [e for e in events if _is_event_item(e)]
-    if not events:  # ultima spiaggia: cerca ovunque
+    if not isinstance(m, dict):
+        m = {}
+    home = m.get('homeTeam') or {}
+    away = m.get('awayTeam') or {}
+    home_id, away_id = home.get('id'), away.get('id')
+    home_n, away_n = _norm(home.get('name') or ''), _norm(away.get('name') or '')
+
+    raw_events = [e for e in (m.get('events') or []) if _is_event_item(e)]
+    if not raw_events:
         lists = _collect_event_lists(raw)
         if lists:
-            events = max(lists, key=len)
-    goals, yellow, red = [], [], []
-    for e in events:
+            raw_events = max(lists, key=len)
+
+    out, h, a = [], 0, 0
+    for e in raw_events:
         if not isinstance(e, dict):
             continue
         t = str(e.get('type') or '').strip().lower()
-        minute = e.get('time') or e.get('minute') or e.get('elapsed') or ''
+        minute = e.get('time') or e.get('minute') or ''
         if isinstance(minute, dict):
             minute = minute.get('elapsed') or minute.get('current') or ''
         minute = str(minute).replace("'", "").strip()
-        player = _ev_name(e.get('player') or e.get('scorer') or e.get('playerName'))
-        assist = _ev_name(e.get('assist'))
-        team   = _ev_name(e.get('team') or e.get('teamName'))
-        if 'subst' in t or 'missed' in t or t == 'var':
+        side = _side_of(e.get('team') or e.get('teamName') or {}, home_id, away_id, home_n, away_n)
+        player  = _ev_name(e.get('player') or e.get('scorer') or e.get('playerName'))
+        assist  = _ev_name(e.get('assist'))
+        sub_in  = _ev_name(e.get('substituted'))   # giocatore che ENTRA
+        note = ''
+        if 'own' in t:                              kind = 'owngoal'
+        elif 'disallow' in t or 'cancel' in t or 'annull' in t or 'var' in t: kind = 'var'
+        elif 'missed' in t:                         kind = 'missed'
+        elif 'goal' in t:                           kind = 'goal'; note = 'rig.' if 'pen' in t else ''
+        elif 'red' in t:                            kind = 'red'
+        elif 'yellow' in t:                         kind = 'yellow'
+        elif 'subst' in t:                          kind = 'sub'
+        else:
             continue
-        if 'goal' in t:
-            note = 'aut.' if 'own' in t else ('rig.' if 'pen' in t else '')
-            goals.append({'player': player, 'assist': assist, 'minute': minute, 'team': team, 'note': note})
-        elif 'red' in t:
-            red.append({'player': player, 'minute': minute, 'team': team})
-        elif 'yellow' in t or 'card' in t:
-            yellow.append({'player': player, 'minute': minute, 'team': team})
-    return {'goals': goals, 'yellow': yellow, 'red': red,
-            'available': bool(goals or yellow or red)}
+        score = ''
+        if kind == 'goal':
+            if side == 'home': h += 1
+            elif side == 'away': a += 1
+            score = f"{h}-{a}"
+        elif kind == 'owngoal':
+            # l'autorete vale per l'ALTRA squadra: la mostriamo sul lato che segna
+            if side == 'home': a += 1; side = 'away'
+            elif side == 'away': h += 1; side = 'home'
+            score = f"{h}-{a}"
+        ev = {'minute': minute, 'half': _half_of(minute), 'kind': kind,
+              'side': side or 'home', 'player': player, 'assist': assist,
+              'note': note, 'score': score, 'off': ''}
+        if kind == 'sub':
+            ev['player'] = sub_in or player        # ENTRA
+            ev['off'] = player if sub_in else ''   # ESCE
+        out.append(ev)
+
+    return {'available': bool(out),
+            'home': home.get('name') or '', 'away': away.get('name') or '',
+            'events': out,
+            'goals':  [e for e in out if e['kind'] in ('goal', 'owngoal')],
+            'yellow': [e for e in out if e['kind'] == 'yellow'],
+            'red':    [e for e in out if e['kind'] == 'red']}
 
 def _real_match_detail(mid):
     c = _REAL_CACHE['details'].get(mid)

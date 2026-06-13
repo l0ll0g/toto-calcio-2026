@@ -9,6 +9,7 @@ let S = {
   wcTab:'groups', wcGroup:'A', wcKoRound:0,
   selAvatar:'⚽', authMode:'login', authSubMode:'login', // authSubMode: login|register|forgot|reset
   myLeagues:[], activeLeague:null, activeLeagueId:null,
+  realDate:null, realData:null, realDetails:{}, realOpen:{},
   topcorer:'', finalPred:{}, koPred:{}, koSubmitted:false,
   live:{matches:{},simulation:true,enabled:false}, _liveTimer:null,
   profileData:null,
@@ -184,6 +185,7 @@ function render() {
     case 'teams':        root.innerHTML=html_teams();       bind_teams();        break;
     case 'myresults':    root.innerHTML=html_myresults();   bind_myresults();    break;
     case 'competitor':   root.innerHTML=html_competitor();  bind_competitor();   break;
+    case 'realmatches':  root.innerHTML=html_realmatches();  bind_realmatches();  break;
   }
 }
 
@@ -394,6 +396,140 @@ function html_competitor(){
 }
 function bind_competitor(){ bind_topbar_events(); }
 
+// ═══════════════════════════════════════════════════════
+// PARTITE REALI — risultati veri giorno per giorno + dettagli
+// ═══════════════════════════════════════════════════════
+function _realDateStr(){ return S.realDate || new Date().toISOString().slice(0,10); }
+function _fmtDateIt(ds){
+  const [y,mo,d]=ds.split('-').map(Number);
+  const dt=new Date(Date.UTC(y,mo-1,d));
+  const dows=['Dom','Lun','Mar','Mer','Gio','Ven','Sab'];
+  const mes=['Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic'];
+  return `${dows[dt.getUTCDay()]} ${d} ${mes[mo-1]}`;
+}
+function _shiftDate(ds,days){
+  const [y,mo,d]=ds.split('-').map(Number);
+  const dt=new Date(Date.UTC(y,mo-1,d)); dt.setUTCDate(dt.getUTCDate()+days);
+  return dt.toISOString().slice(0,10);
+}
+function _rmRerender(){
+  if(S.view!=='realmatches') return;
+  const sc=window.scrollY;
+  document.getElementById('app').innerHTML=html_realmatches();
+  bind_realmatches(true);
+  window.scrollTo(0,sc);
+}
+async function loadRealMatches(ds){
+  S.realDate=ds; S.realData={loading:true,matches:[]}; S.realOpen={};
+  _rmRerender();
+  try{ S.realData=await api('/api/real_matches?date='+encodeURIComponent(ds)); }
+  catch(e){ S.realData={matches:[],error:'Errore di rete'}; }
+  _rmRerender();
+}
+async function loadRealDetail(id){
+  if(S.realDetails[id] && !S.realDetails[id].loading) { _rmRerender(); return; }
+  S.realDetails[id]={loading:true};
+  _rmRerender();
+  try{ S.realDetails[id]=await api('/api/real_match/'+encodeURIComponent(id)); }
+  catch(e){ S.realDetails[id]={available:false,error:'Errore'}; }
+  _rmRerender();
+}
+function _rmDetailHtml(id){
+  const d=S.realDetails[id];
+  if(!d) return '';
+  if(d.loading) return `<div class="text-white/30 text-xs px-3 pb-3"><i class="fa-solid fa-spinner spinner mr-1"></i>Carico i dettagli…</div>`;
+  if(d.error) return `<div class="text-red-300/70 text-xs px-3 pb-3">${d.error}</div>`;
+  const goals=d.goals||[], yellow=d.yellow||[], red=d.red||[];
+  if(!goals.length && !yellow.length && !red.length){
+    return `<div class="text-white/30 text-xs px-3 pb-3">Nessun dettaglio disponibile dalla fonte per questa partita.</div>`;
+  }
+  const min=v=>v?`<span class="text-white/30">${v}'</span> `:'';
+  const line=(items,icon,render)=> items.length?`<div class="px-3 pb-2"><div class="text-[11px] uppercase tracking-wider text-white/30 mb-1">${icon}</div>${items.map(render).join('')}</div>`:'';
+  return `
+    <div class="pt-1" style="border-top:1px solid rgba(255,255,255,0.06)">
+      ${line(goals,'⚽ Marcatori', g=>`<div class="text-sm text-white/80">${min(g.minute)}${g.player||'—'}${g.note?` <span class="text-gold/70 text-xs">(${g.note})</span>`:''}${g.assist?` <span class="text-white/40 text-xs">assist: ${g.assist}</span>`:''}${g.team?` <span class="text-white/25 text-xs">· ${g.team}</span>`:''}</div>`)}
+      ${line(yellow,'🟨 Ammoniti', c=>`<div class="text-sm text-white/70">${min(c.minute)}${c.player||'—'}${c.team?` <span class="text-white/25 text-xs">· ${c.team}</span>`:''}</div>`)}
+      ${line(red,'🟥 Espulsi', c=>`<div class="text-sm text-white/70">${min(c.minute)}${c.player||'—'}${c.team?` <span class="text-white/25 text-xs">· ${c.team}</span>`:''}</div>`)}
+    </div>`;
+}
+function html_realmatches(){
+  const ds=_realDateStr();
+  const data=S.realData||{};
+  const matches=data.matches||[];
+  const dateNav=`
+    <div class="flex items-center justify-between glass rounded-2xl p-3 mb-4">
+      <button id="rm-prev" class="px-3 py-2 rounded-lg text-white/70" style="background:rgba(255,255,255,0.06)"><i class="fa-solid fa-chevron-left"></i></button>
+      <div class="text-center">
+        <div class="font-display text-lg text-white tracking-wide">${_fmtDateIt(ds)}</div>
+        <button id="rm-today" class="text-gold text-xs hover:underline">oggi</button>
+      </div>
+      <button id="rm-next" class="px-3 py-2 rounded-lg text-white/70" style="background:rgba(255,255,255,0.06)"><i class="fa-solid fa-chevron-right"></i></button>
+    </div>`;
+  let body;
+  if(data.error){
+    body=`<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm"><i class="fa-solid fa-triangle-exclamation mr-2 text-amber-400/70"></i>${data.error}</div>`;
+  } else if(data.loading){
+    body=`<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm"><i class="fa-solid fa-spinner spinner mr-2"></i>Carico le partite…</div>`;
+  } else if(!matches.length){
+    body=`<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm">Nessuna partita trovata per questa data.</div>`;
+  } else {
+    const byLeague={};
+    matches.forEach(m=>{ const key=(m.country?m.country+' · ':'')+(m.league||'—'); (byLeague[key]=byLeague[key]||[]).push(m); });
+    const statusChip=(m)=>{
+      if(m.status==='FINISHED') return `<span class="text-white/40 text-[11px] font-bold">FT</span>`;
+      if(m.status==='IN_PLAY') return `<span style="color:#22c55e" class="text-[11px] font-bold whitespace-nowrap">● ${m.minute?m.minute+"'":'LIVE'}</span>`;
+      let t=''; if(m.kickoff){ const dt=new Date(m.kickoff); if(!isNaN(dt.getTime())) t=dt.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}); }
+      return `<span class="text-white/30 text-[11px]">${t||'—'}</span>`;
+    };
+    const logo=(u)=> u?`<img src="${u}" style="width:18px;height:18px;object-fit:contain" onerror="this.style.display='none'">`:'';
+    const matchRow=(m)=>{
+      const open=!!S.realOpen[m.id];
+      const sc=(m.score && m.score.includes('-')) ? m.score.replace('-',' – ') : (m.status==='SCHEDULED'?'vs':'– – –');
+      const scColor=m.status==='IN_PLAY'?'#22c55e':(m.status==='FINISHED'?'#C8A44A':'rgba(255,255,255,0.4)');
+      return `
+      <div class="glass rounded-xl mb-2 overflow-hidden">
+        <div class="rm-match flex items-center gap-2 p-3 cursor-pointer" data-id="${m.id}">
+          <div class="w-10 flex-shrink-0 text-center">${statusChip(m)}</div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-end gap-2 mb-1"><span class="text-white text-sm truncate text-right">${m.home}</span>${logo(m.home_logo)}</div>
+            <div class="flex items-center gap-2">${logo(m.away_logo)}<span class="text-white text-sm truncate">${m.away}</span></div>
+          </div>
+          <div class="px-2 font-display text-xl flex-shrink-0" style="color:${scColor}">${sc}</div>
+          <i class="fa-solid fa-chevron-${open?'up':'down'} text-white/20 text-xs flex-shrink-0"></i>
+        </div>
+        ${open?_rmDetailHtml(m.id):''}
+      </div>`;
+    };
+    body=Object.keys(byLeague).sort().map(lg=>`
+      <div class="mb-4">
+        <div class="text-gold text-xs font-bold uppercase tracking-wider mb-2 px-1">${lg}</div>
+        ${byLeague[lg].map(matchRow).join('')}
+      </div>`).join('');
+  }
+  return `
+    ${html_topbar({back:true,title:'PARTITE REALI',subtitle:'Risultati e dettagli'})}
+    <main class="max-w-2xl mx-auto px-4 pb-24 pt-4">
+      ${dateNav}
+      ${body}
+    </main>`;
+}
+function bind_realmatches(isRerender){
+  bind_topbar_events();
+  document.getElementById('rm-prev')?.addEventListener('click', ()=>loadRealMatches(_shiftDate(_realDateStr(),-1)));
+  document.getElementById('rm-next')?.addEventListener('click', ()=>loadRealMatches(_shiftDate(_realDateStr(),1)));
+  document.getElementById('rm-today')?.addEventListener('click', ()=>loadRealMatches(new Date().toISOString().slice(0,10)));
+  document.querySelectorAll('.rm-match').forEach(el=>el.addEventListener('click', ()=>{
+    const id=el.dataset.id;
+    S.realOpen[id]=!S.realOpen[id];
+    if(S.realOpen[id]) loadRealDetail(id);
+    else _rmRerender();
+  }));
+  // primo caricamento (o cambio data) quando i dati non corrispondono alla data scelta
+  if(!isRerender && (!S.realData || S.realData.date!==_realDateStr())){
+    loadRealMatches(_realDateStr());
+  }
+}
+
 function html_topbar(opts={}) {
   const {back, title, subtitle, rightSlot=''} = opts;
   const onDashboard = S.view === 'dashboard';
@@ -429,7 +565,7 @@ function bind_topbar_events() {
   document.getElementById('btn-back')?.addEventListener('click', () => {
     // Teams detail → teams list; teams list → dashboard
     if (S.view === 'teams' && S.teamsTeam) { S.teamsTeam = null; render(); return; }
-    if (S.view==='worldcup'||S.view==='leagueDetail'||S.view==='teams'||S.view==='admin'||S.view==='myresults'||S.view==='competitor') nav('dashboard');
+    if (S.view==='worldcup'||S.view==='leagueDetail'||S.view==='teams'||S.view==='admin'||S.view==='myresults'||S.view==='competitor'||S.view==='realmatches') nav('dashboard');
     else if (S.view==='profile') nav(S._prevView||'dashboard');
     else nav('dashboard');
   });
@@ -946,6 +1082,18 @@ function html_dash() {
         <i class="fa-solid fa-arrow-right text-gold/50 text-sm flex-shrink-0"></i>
       </button>
 
+      <!-- Partite reali (risultati veri giorno per giorno) -->
+      <button id="btn-realmatches" class="w-full glass rounded-2xl p-4 mb-5 flex items-center gap-4 hover:border-gold/30 transition-all text-left">
+        <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0" style="background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.25)">
+          <i class="fa-solid fa-futbol text-xl" style="color:#60a5fa"></i>
+        </div>
+        <div class="flex-1">
+          <div class="font-display text-lg text-white tracking-wide">PARTITE REALI</div>
+          <div class="text-white/35 text-xs">Risultati veri giorno per giorno: marcatori, assist, ammoniti, espulsi</div>
+        </div>
+        <i class="fa-solid fa-arrow-right text-gold/50 text-sm flex-shrink-0"></i>
+      </button>
+
       <!-- Special predictions strip -->
       <div class="mb-8">
         <!-- Topscorer -->
@@ -1036,6 +1184,7 @@ function bind_dash() {
   document.getElementById('btn-admin-panel-m')?.addEventListener('click', () => { S._prevView='dashboard'; nav('admin'); });
   document.getElementById('btn-manage-leagues')?.addEventListener('click', () => nav('leagues'));
   document.getElementById('btn-myresults')?.addEventListener('click', () => nav('myresults'));
+  document.getElementById('btn-realmatches')?.addEventListener('click', () => nav('realmatches'));
   document.querySelectorAll('.lb-click').forEach(el => {
     el.addEventListener('click', async () => {
       if (!S.activeLeagueId) return;

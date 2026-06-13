@@ -802,6 +802,109 @@ FRIENDLY_SCHEDULE = [
     {'id':'fr-05','kickoff':'2026-06-10T19:45:00Z','home':'Portogallo','away':'Nigeria'},
 ]
 
+def _hl_get_json(url):
+    """GET su Highlightly che ritorna JSON (con header browser)."""
+    req = _urlreq.Request(url, headers=_hl_headers())
+    with _urlreq.urlopen(req, timeout=12) as resp:
+        return json.loads(resp.read().decode('utf-8', 'replace'))
+
+# Cache per il pannello "Partite reali" (protegge il limite ~100 richieste/giorno)
+_REAL_CACHE = {'days': {}, 'details': {}}
+_REAL_DAY_TTL = 300      # 5 min per l'elenco di una giornata
+_REAL_DETAIL_TTL = 120   # 2 min per i dettagli di una partita
+
+def _real_day_matches(date_str):
+    c = _REAL_CACHE['days'].get(date_str)
+    now = _time.time()
+    if c and now - c['ts'] < _REAL_DAY_TTL:
+        return c['matches']
+    out, offset = [], 0
+    season = _cfg_season()
+    for _ in range(4):  # tetto: ~400 partite/giorno
+        data = _hl_get_json(f"{HIGHLIGHTLY_BASE}/matches?date={date_str}&season={season}&limit=100&offset={offset}")
+        rows = data.get('data', []) or []
+        for m in rows:
+            st = m.get('state') or {}
+            lg = m.get('league') or {}
+            country = lg.get('country')
+            if isinstance(country, dict):
+                country = country.get('name') or ''
+            out.append({
+                'id': m.get('id'),
+                'home': (m.get('homeTeam') or {}).get('name', ''),
+                'away': (m.get('awayTeam') or {}).get('name', ''),
+                'home_logo': (m.get('homeTeam') or {}).get('logo', ''),
+                'away_logo': (m.get('awayTeam') or {}).get('logo', ''),
+                'score': (st.get('score') or {}).get('current') or '',
+                'status': _hl_status(st.get('description')),
+                'status_raw': st.get('description') or '',
+                'minute': st.get('clock'),
+                'league': lg.get('name') or '',
+                'league_logo': lg.get('logo') or '',
+                'country': country or '',
+                'kickoff': m.get('date') or '',
+            })
+        pag = data.get('pagination') or {}
+        total = pag.get('totalCount', 0)
+        got = len(rows); offset += got
+        if got == 0 or offset >= total:
+            break
+    _REAL_CACHE['days'][date_str] = {'ts': now, 'matches': out}
+    return out
+
+def _ev_name(x):
+    if isinstance(x, dict):
+        return x.get('name') or x.get('player') or x.get('fullName') or ''
+    return x or ''
+
+def _parse_match_events(raw):
+    """Estrae marcatori/assist/ammoniti/espulsi dal dettaglio partita, in modo
+    difensivo (la struttura esatta può variare)."""
+    m = raw
+    if isinstance(raw, dict) and isinstance(raw.get('data'), (dict, list)):
+        dd = raw['data']
+        m = (dd[0] if (isinstance(dd, list) and dd) else dd) if dd else raw
+    events = []
+    if isinstance(m, dict):
+        events = m.get('events') or (m.get('state') or {}).get('events') or m.get('timeline') or []
+    goals, yellow, red = [], [], []
+    for e in events or []:
+        if not isinstance(e, dict):
+            continue
+        etype  = (e.get('type') or e.get('eventType') or '').lower()
+        detail = (e.get('detail') or e.get('description') or e.get('card') or e.get('subType') or '').lower()
+        minute = e.get('time') or e.get('minute') or e.get('clock') or e.get('elapsed') or ''
+        if isinstance(minute, dict):
+            minute = minute.get('elapsed') or minute.get('current') or ''
+        player = _ev_name(e.get('player') or e.get('scorer') or e.get('playerName') or e.get('playerOut'))
+        assist = _ev_name(e.get('assist') or e.get('assistPlayer') or e.get('assistName'))
+        team   = _ev_name(e.get('team') or e.get('teamName'))
+        if 'goal' in etype or 'goal' in detail:
+            note = 'rig.' if 'pen' in detail else ('aut.' if 'own' in detail else '')
+            goals.append({'player': player, 'assist': assist, 'minute': minute, 'team': team, 'note': note})
+        elif 'card' in etype or 'card' in detail or etype in ('yellowcard', 'redcard', 'yellow', 'red'):
+            if 'red' in detail or 'red' in etype:
+                red.append({'player': player, 'minute': minute, 'team': team})
+            elif 'yellow' in detail or 'yellow' in etype:
+                yellow.append({'player': player, 'minute': minute, 'team': team})
+    return {'goals': goals, 'yellow': yellow, 'red': red, 'available': bool(events)}
+
+def _real_match_detail(mid):
+    c = _REAL_CACHE['details'].get(mid)
+    now = _time.time()
+    if c and now - c['ts'] < _REAL_DETAIL_TTL:
+        return c['data']
+    data = {'available': False, 'goals': [], 'yellow': [], 'red': []}
+    for url in (f"{HIGHLIGHTLY_BASE}/matches/{mid}", f"{HIGHLIGHTLY_BASE}/events?matchId={mid}"):
+        try:
+            data = _parse_match_events(_hl_get_json(url))
+            if data.get('available'):
+                break
+        except Exception:
+            continue
+    _REAL_CACHE['details'][mid] = {'ts': now, 'data': data}
+    return data
+
 def _hl_status(desc):
     """Mappa lo stato Highlightly (state.description) ai nostri 3 stati."""
     d = (desc or '').lower()
@@ -1128,6 +1231,29 @@ def api_live():
         'error': LIVE_STATE['error'],
         'poll_seconds': LIVE_POLL_SECONDS,
     })
+
+@app.route('/api/real_matches')
+@login_required
+def api_real_matches():
+    """Elenco delle partite reali di una giornata (qualsiasi campionato)."""
+    if not LIVE_ENABLED:
+        return jsonify({'error': 'Fonte non configurata (HIGHLIGHTLY_KEY mancante)', 'matches': []})
+    date_str = (request.args.get('date') or datetime.now(timezone.utc).date().isoformat()).strip()
+    try:
+        return jsonify({'date': date_str, 'matches': _real_day_matches(date_str)})
+    except Exception as e:
+        return jsonify({'date': date_str, 'matches': [], 'error': 'Fonte non raggiungibile: ' + str(e)})
+
+@app.route('/api/real_match/<path:mid>')
+@login_required
+def api_real_match(mid):
+    """Dettaglio partita reale: marcatori, assist, ammoniti, espulsi."""
+    if not LIVE_ENABLED:
+        return jsonify({'available': False, 'error': 'Fonte non configurata'})
+    try:
+        return jsonify(_real_match_detail(mid))
+    except Exception as e:
+        return jsonify({'available': False, 'error': str(e), 'goals': [], 'yellow': [], 'red': []})
 
 @app.route('/api/admin/live_config', methods=['GET'])
 @login_required

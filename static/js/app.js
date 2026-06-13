@@ -434,6 +434,60 @@ async function loadRealDetail(id){
   catch(e){ S.realDetails[id]={available:false,error:'Errore'}; }
   _rmRerender();
 }
+function _rmTimelineHtml(id){
+  const d=S.realDetails[id];
+  if(!d) return '';
+  if(d.loading) return `<div class="text-white/30 text-xs py-4 text-center"><i class="fa-solid fa-spinner spinner mr-1"></i>Carico i dettagli…</div>`;
+  if(d.error) return `<div class="text-red-300/70 text-xs py-4 text-center">${d.error}</div>`;
+  const evs=d.events||[];
+  if(!evs.length) return `<div class="text-white/30 text-xs py-4 text-center">Nessun dettaglio disponibile dalla fonte per questa partita.</div>`;
+  const cardRect=(c)=>`<span style="display:inline-block;width:11px;height:15px;background:${c};border-radius:2px"></span>`;
+  const icon=(e)=>{
+    switch(e.kind){
+      case 'goal':    return `<i class="fa-solid fa-futbol" style="color:#fff"></i>`;
+      case 'owngoal': return `<i class="fa-solid fa-futbol" style="color:#e8192c"></i>`;
+      case 'yellow':  return cardRect('#f4c430');
+      case 'red':     return cardRect('#e8192c');
+      case 'sub':     return `<i class="fa-solid fa-right-left" style="color:#22c55e;font-size:0.8em"></i>`;
+      case 'var':     return `<span style="font-size:9px;font-weight:700;border:1px solid rgba(255,255,255,0.35);border-radius:3px;padding:0 3px;color:#fff">VAR</span>`;
+      case 'missed':  return `<i class="fa-solid fa-futbol" style="color:#fff;opacity:0.35"></i>`;
+      default:        return `<span class="text-white/30">•</span>`;
+    }
+  };
+  const txt=(e)=>{
+    let main=e.player||'', extra='';
+    if(e.kind==='goal'){ if(e.note) extra+=` <span class="text-gold/70 text-xs">(${e.note})</span>`; if(e.assist) extra+=` <span class="text-white/40 text-xs">(${e.assist})</span>`; }
+    else if(e.kind==='owngoal'){ extra=` <span class="text-white/40 text-xs">(aut.)</span>`; }
+    else if(e.kind==='sub' && e.off){ extra=` <span class="text-white/40 text-xs">(${e.off})</span>`; }
+    else if(e.kind==='var'){ main=e.player||'Gol annullato'; extra=` <span class="text-white/40 text-xs">annullato</span>`; }
+    else if(e.kind==='missed'){ extra=` <span class="text-white/40 text-xs">(rig. sbagliato)</span>`; }
+    const bold=(e.kind==='goal'||e.kind==='owngoal')?'font-semibold':'';
+    return `<span class="text-white text-sm ${bold}">${main}</span>${extra}`;
+  };
+  const sc=(e)=> (e.kind==='goal'||e.kind==='owngoal') && e.score ? `<span class="font-display text-sm flex-shrink-0" style="color:#C8A44A">${e.score.replace('-',' - ')}</span>` : '';
+  const row=(e)=>{
+    const home=e.side==='home';
+    const mins=`<span class="text-white/35 text-xs">${e.minute}'</span>`;
+    const left  = home ? `<div class="flex items-center gap-2">${icon(e)}${sc(e)}<span class="min-w-0">${txt(e)}</span></div>` : '';
+    const right = !home ? `<div class="flex items-center gap-2 justify-end text-right"><span class="min-w-0">${txt(e)}</span>${sc(e)}${icon(e)}</div>` : '';
+    return `<div class="flex items-center gap-2 py-2" style="border-bottom:1px solid rgba(255,255,255,0.05)">
+      <div class="w-7 text-right flex-shrink-0">${home?mins:''}</div>
+      <div class="flex-1 min-w-0">${left}</div>
+      <div class="flex-1 min-w-0">${right}</div>
+      <div class="w-7 text-left flex-shrink-0">${!home?mins:''}</div>
+    </div>`;
+  };
+  const half=(title,arr)=>{
+    if(!arr.length) return '';
+    let h=0,a=0; arr.forEach(e=>{ if(e.kind==='goal'||e.kind==='owngoal'){ e.side==='home'?h++:a++; } });
+    return `<div class="flex items-center justify-between px-2 py-1.5 mt-3 mb-1 rounded-lg" style="background:rgba(255,255,255,0.05)">
+        <span class="text-white/50 text-xs font-bold tracking-wide">${title}</span>
+        <span class="text-white/50 text-xs font-bold">${h} - ${a}</span>
+      </div>${arr.map(row).join('')}`;
+  };
+  const h1=evs.filter(e=>e.half===1), h2=evs.filter(e=>e.half!==1);
+  return `<div>${half('1° TEMPO',h1)}${half('2° TEMPO',h2)}</div>`;
+}
 function _rmDetailHtml(id){
   const d=S.realDetails[id];
   if(!d) return '';
@@ -544,7 +598,7 @@ function _rmModalHtml(){
           <div class="flex-1 flex items-center gap-2 text-left">${lf(m.away_logo)}<span class="text-white font-semibold leading-tight">${m.away}</span></div>
         </div>
         <div class="text-center text-white/30 text-xs mb-3">${st}</div>
-        ${_rmDetailHtml(id)}
+        ${_rmTimelineHtml(id)}
       </div>
     </div>
   </div>`;

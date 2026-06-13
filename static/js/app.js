@@ -9,7 +9,7 @@ let S = {
   wcTab:'groups', wcGroup:'A', wcKoRound:0,
   selAvatar:'⚽', authMode:'login', authSubMode:'login', // authSubMode: login|register|forgot|reset
   myLeagues:[], activeLeague:null, activeLeagueId:null,
-  realDate:null, realData:null, realDetails:{}, realOpen:{},
+  realDate:null, realData:null, realDetails:{}, realModal:null,
   topcorer:'', finalPred:{}, koPred:{}, koSubmitted:false,
   live:{matches:{},simulation:true,enabled:false}, _liveTimer:null,
   profileData:null,
@@ -420,7 +420,7 @@ function _rmRerender(){
   window.scrollTo(0,sc);
 }
 async function loadRealMatches(ds){
-  S.realDate=ds; S.realData={loading:true,matches:[]}; S.realOpen={};
+  S.realDate=ds; S.realData={loading:true,matches:[]}; S.realModal=null;
   _rmRerender();
   try{ S.realData=await api('/api/real_matches?date='+encodeURIComponent(ds)); }
   catch(e){ S.realData={matches:[],error:'Errore di rete'}; }
@@ -437,14 +437,14 @@ async function loadRealDetail(id){
 function _rmDetailHtml(id){
   const d=S.realDetails[id];
   if(!d) return '';
-  if(d.loading) return `<div class="text-white/30 text-xs px-3 pb-3"><i class="fa-solid fa-spinner spinner mr-1"></i>Carico i dettagli…</div>`;
-  if(d.error) return `<div class="text-red-300/70 text-xs px-3 pb-3">${d.error}</div>`;
+  if(d.loading) return `<div class="text-white/30 text-xs py-2"><i class="fa-solid fa-spinner spinner mr-1"></i>Carico i dettagli…</div>`;
+  if(d.error) return `<div class="text-red-300/70 text-xs py-2">${d.error}</div>`;
   const goals=d.goals||[], yellow=d.yellow||[], red=d.red||[];
   if(!goals.length && !yellow.length && !red.length){
-    return `<div class="text-white/30 text-xs px-3 pb-3">Nessun dettaglio disponibile dalla fonte per questa partita.</div>`;
+    return `<div class="text-white/30 text-xs py-2">Nessun dettaglio disponibile dalla fonte per questa partita.</div>`;
   }
   const min=v=>v?`<span class="text-white/30">${v}'</span> `:'';
-  const line=(items,icon,render)=> items.length?`<div class="px-3 pb-2"><div class="text-[11px] uppercase tracking-wider text-white/30 mb-1">${icon}</div>${items.map(render).join('')}</div>`:'';
+  const line=(items,icon,render)=> items.length?`<div class="pb-2"><div class="text-[11px] uppercase tracking-wider text-white/30 mb-1">${icon}</div>${items.map(render).join('')}</div>`:'';
   return `
     <div class="pt-1" style="border-top:1px solid rgba(255,255,255,0.06)">
       ${line(goals,'⚽ Marcatori', g=>`<div class="text-sm text-white/80">${min(g.minute)}${g.player||'—'}${g.note?` <span class="text-gold/70 text-xs">(${g.note})</span>`:''}${g.assist?` <span class="text-white/40 text-xs">assist: ${g.assist}</span>`:''}${g.team?` <span class="text-white/25 text-xs">· ${g.team}</span>`:''}</div>`)}
@@ -483,21 +483,21 @@ function html_realmatches(){
     };
     const logo=(u)=> u?`<img src="${u}" style="width:18px;height:18px;object-fit:contain" onerror="this.style.display='none'">`:'';
     const matchRow=(m)=>{
-      const open=!!S.realOpen[m.id];
-      const sc=(m.score && m.score.includes('-')) ? m.score.replace('-',' – ') : (m.status==='SCHEDULED'?'vs':'– – –');
-      const scColor=m.status==='IN_PLAY'?'#22c55e':(m.status==='FINISHED'?'#C8A44A':'rgba(255,255,255,0.4)');
+      const hasScore = m.score && m.score.includes('-');
+      const parts = hasScore ? m.score.split('-') : ['',''];
+      const scColor = m.status==='IN_PLAY' ? '#22c55e' : (m.status==='FINISHED' ? '#C8A44A' : 'rgba(255,255,255,0.4)');
+      const scoreCol = hasScore
+        ? `<div class="text-right font-display text-xl leading-tight flex-shrink-0 w-7" style="color:${scColor}"><div>${parts[0].trim()}</div><div>${parts[1].trim()}</div></div>`
+        : `<div class="text-right text-white/30 text-xs flex-shrink-0 w-7">vs</div>`;
       return `
-      <div class="glass rounded-xl mb-2 overflow-hidden">
-        <div class="rm-match flex items-center gap-2 p-3 cursor-pointer" data-id="${m.id}">
-          <div class="w-10 flex-shrink-0 text-center">${statusChip(m)}</div>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-end gap-2 mb-1"><span class="text-white text-sm truncate text-right">${m.home}</span>${logo(m.home_logo)}</div>
-            <div class="flex items-center gap-2">${logo(m.away_logo)}<span class="text-white text-sm truncate">${m.away}</span></div>
-          </div>
-          <div class="px-2 font-display text-xl flex-shrink-0" style="color:${scColor}">${sc}</div>
-          <i class="fa-solid fa-chevron-${open?'up':'down'} text-white/20 text-xs flex-shrink-0"></i>
+      <div class="rm-match glass rounded-xl mb-2 p-3 flex items-center gap-3 cursor-pointer hover:border-gold/30 transition-all" data-id="${m.id}">
+        <div class="w-9 flex-shrink-0 text-center">${statusChip(m)}</div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-1.5">${logo(m.home_logo)}<span class="text-white text-sm truncate">${m.home}</span></div>
+          <div class="flex items-center gap-2">${logo(m.away_logo)}<span class="text-white text-sm truncate">${m.away}</span></div>
         </div>
-        ${open?_rmDetailHtml(m.id):''}
+        ${scoreCol}
+        <i class="fa-solid fa-chevron-right text-white/20 text-xs flex-shrink-0"></i>
       </div>`;
     };
     body=Object.keys(byLeague).sort().map(lg=>`
@@ -515,7 +515,39 @@ function html_realmatches(){
       ${dateNav}
       ${hint}
       ${body}
-    </main>`;
+    </main>
+    ${S.realModal ? _rmModalHtml() : ''}`;
+}
+function _rmModalHtml(){
+  const id = S.realModal;
+  const m = ((S.realData&&S.realData.matches)||[]).find(x=>String(x.id)===String(id));
+  if(!m) return '';
+  const lg = (m.country?m.country+' · ':'')+(m.league||'Mondiale');
+  const sc = (m.score&&m.score.includes('-')) ? m.score.replace('-',' – ') : 'vs';
+  const scColor = m.status==='IN_PLAY' ? '#22c55e' : (m.status==='FINISHED' ? '#C8A44A' : 'rgba(255,255,255,0.6)');
+  const lf=(u)=> u?`<img src="${u}" style="width:30px;height:30px;object-fit:contain" onerror="this.style.display='none'">`:'';
+  let st='';
+  if(m.status==='FINISHED') st='Finita';
+  else if(m.status==='IN_PLAY') st='In corso'+(m.minute?` · ${m.minute}'`:'');
+  else { let t=''; if(m.kickoff){const dt=new Date(m.kickoff); if(!isNaN(dt.getTime())) t=dt.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});} st='Inizio '+(t||'—'); }
+  return `
+  <div class="rm-modal-backdrop fixed inset-0 z-50 flex items-end sm:items-center justify-center px-0 sm:px-4" style="background:rgba(0,0,0,0.65)">
+    <div class="rm-modal-card w-full sm:max-w-lg" style="background:#0c1428;border:1px solid rgba(255,255,255,0.12);border-radius:20px 20px 0 0;max-height:88vh;overflow-y:auto" onclick="event.stopPropagation()">
+      <div class="sticky top-0 flex items-center justify-between px-5 pt-4 pb-3" style="background:#0c1428;border-bottom:1px solid rgba(255,255,255,0.06)">
+        <span class="text-gold text-xs font-bold uppercase tracking-wider truncate">${lg}</span>
+        <button class="rm-modal-close text-white/50 hover:text-white ml-3"><i class="fa-solid fa-xmark text-xl"></i></button>
+      </div>
+      <div class="px-5 py-4">
+        <div class="flex items-center justify-between gap-3 mb-1">
+          <div class="flex-1 flex items-center gap-2 justify-end text-right"><span class="text-white font-semibold leading-tight">${m.home}</span>${lf(m.home_logo)}</div>
+          <div class="font-display text-3xl flex-shrink-0 px-1" style="color:${scColor}">${sc}</div>
+          <div class="flex-1 flex items-center gap-2 text-left">${lf(m.away_logo)}<span class="text-white font-semibold leading-tight">${m.away}</span></div>
+        </div>
+        <div class="text-center text-white/30 text-xs mb-3">${st}</div>
+        ${_rmDetailHtml(id)}
+      </div>
+    </div>
+  </div>`;
 }
 function bind_realmatches(isRerender){
   bind_topbar_events();
@@ -524,10 +556,13 @@ function bind_realmatches(isRerender){
   document.getElementById('rm-today')?.addEventListener('click', ()=>loadRealMatches(new Date().toISOString().slice(0,10)));
   document.querySelectorAll('.rm-match').forEach(el=>el.addEventListener('click', ()=>{
     const id=el.dataset.id;
-    S.realOpen[id]=!S.realOpen[id];
-    if(S.realOpen[id]) loadRealDetail(id);
-    else _rmRerender();
+    S.realModal=id;
+    loadRealDetail(id);   // ricarica/mostra il popup (re-render dentro)
+    _rmRerender();
   }));
+  const closeModal=()=>{ S.realModal=null; _rmRerender(); };
+  document.querySelector('.rm-modal-backdrop')?.addEventListener('click', closeModal);
+  document.querySelector('.rm-modal-close')?.addEventListener('click', (e)=>{ e.stopPropagation(); closeModal(); });
   // primo caricamento (o cambio data) quando i dati non corrispondono alla data scelta
   if(!isRerender && (!S.realData || S.realData.date!==_realDateStr())){
     loadRealMatches(_realDateStr());

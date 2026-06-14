@@ -9,7 +9,7 @@ let S = {
   wcTab:'groups', wcGroup:'A', wcKoRound:0,
   selAvatar:'⚽', authMode:'login', authSubMode:'login', // authSubMode: login|register|forgot|reset
   myLeagues:[], activeLeague:null, activeLeagueId:null,
-  realDate:null, realData:null, realDetails:{}, realModal:null,
+  realDate:null, realData:null, realDetails:{}, realModal:null, realTab:'matches', realStandings:null, realStats:null,
   topcorer:'', finalPred:{}, koPred:{}, koSubmitted:false,
   live:{matches:{},simulation:true,enabled:false}, _liveTimer:null,
   profileData:null,
@@ -563,12 +563,19 @@ function html_realmatches(){
   const hint = (data.configured===false && !data.loading && !data.error)
     ? `<div class="text-white/30 text-[11px] mb-3 px-1"><i class="fa-solid fa-circle-info mr-1"></i>Per agganciare con precisione il Mondiale, imposta la lega in <strong class="text-white/50">Admin → Fonte live Mondiale</strong>.</div>`
     : '';
+  const tab=S.realTab||'matches';
+  const tabBtn=(id,label)=>`<button class="rm-tab flex-1 py-2 px-1 rounded-lg text-xs font-bold" data-tab="${id}" style="${tab===id?'background:rgba(200,164,74,0.15);border:1px solid rgba(200,164,74,0.3);color:#C8A44A':'background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);color:rgba(255,255,255,0.5)'}">${label}</button>`;
+  const tabBar=`<div class="flex gap-1.5 mb-4">${tabBtn('matches','Partite')}${tabBtn('standings','Classifiche')}${tabBtn('scorers','Marcatori')}${tabBtn('news','Notizie')}</div>`;
+  let content;
+  if(tab==='standings')      content = _rmStandingsHtml();
+  else if(tab==='scorers')   content = _rmStatsHtml();
+  else if(tab==='news')      content = _rmNewsTabHtml();
+  else                       content = `${dateNav}${hint}${body}`;
   return `
     ${html_topbar({back:true,title:'PARTITE MONDIALE',subtitle:'Risultati e dettagli'})}
     <main class="max-w-2xl mx-auto px-4 pb-24 pt-4">
-      ${dateNav}
-      ${hint}
-      ${body}
+      ${tabBar}
+      ${content}
     </main>
     ${S.realModal ? _rmModalHtml() : ''}`;
 }
@@ -599,9 +606,122 @@ function _rmModalHtml(){
         </div>
         <div class="text-center text-white/30 text-xs mb-3">${st}</div>
         ${_rmTimelineHtml(id)}
+        ${_rmNewsHtml(id)}
       </div>
     </div>
   </div>`;
+}
+function _rmStandingsHtml(){
+  const d=S.realStandings;
+  if(!d||d.loading) return `<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm"><i class="fa-solid fa-spinner spinner mr-2"></i>Carico le classifiche…</div>`;
+  if(d.error) return `<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm"><i class="fa-solid fa-triangle-exclamation mr-2" style="color:rgba(245,200,80,0.8)"></i>${d.error}</div>`;
+  const groups=d.groups||[];
+  if(!groups.length) return `<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm">Classifiche non ancora disponibili dalla fonte.</div>`;
+  const logo=(u)=> u?`<img src="${u}" style="width:18px;height:18px;object-fit:contain" onerror="this.style.display='none'">`:'';
+  return groups.map(g=>`
+    <div class="glass rounded-xl p-3 mb-3">
+      <div class="text-gold text-xs font-bold uppercase tracking-wider mb-2">${g.name||'Girone'}</div>
+      <table class="w-full" style="border-collapse:collapse">
+        <thead><tr class="text-white/30" style="font-size:10px;text-transform:uppercase">
+          <th class="text-center" style="width:20px">#</th>
+          <th class="text-left">Squadra</th>
+          <th class="text-center" style="width:26px">PG</th>
+          <th class="text-center" style="width:46px">V-N-P</th>
+          <th class="text-center" style="width:34px">DR</th>
+          <th class="text-center" style="width:24px">Pt</th>
+        </tr></thead>
+        <tbody>
+        ${(g.rows||[]).map((r,i)=>`<tr style="border-top:1px solid rgba(255,255,255,0.05)">
+          <td class="text-center text-white/40 py-1.5 text-sm">${r.position??(i+1)}</td>
+          <td class="py-1.5"><div class="flex items-center gap-2 min-w-0">${logo(r.logo)}<span class="text-white text-sm truncate">${r.team}</span></div></td>
+          <td class="text-center text-white/60 text-sm">${r.played??''}</td>
+          <td class="text-center text-white/50 text-xs">${(r.win??'-')}-${(r.draw??'-')}-${(r.loss??'-')}</td>
+          <td class="text-center text-white/60 text-sm">${(r.gd>0?'+':'')}${r.gd??''}</td>
+          <td class="text-center text-white font-bold text-sm">${r.points??''}</td>
+        </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`).join('');
+}
+function _rmNewsHtml(id){
+  const d=S.realDetails[id];
+  if(!d || d.loading || !d.news || !d.news.length) return '';
+  return `<div class="mt-3 pt-3" style="border-top:1px solid rgba(255,255,255,0.08)">
+    <div class="text-white/50 text-xs font-bold uppercase tracking-wide mb-2"><i class="fa-regular fa-newspaper mr-1"></i>Notizie</div>
+    ${d.news.map(n=>`<a href="${n.url}" target="_blank" rel="noopener noreferrer" class="flex items-center gap-2 py-1.5">
+        ${n.image?`<img src="${n.image}" style="width:44px;height:32px;object-fit:cover;border-radius:4px;flex-shrink:0" onerror="this.style.display='none'">`:''}
+        <span class="flex-1 text-white/80 text-sm leading-tight min-w-0">${n.title}</span>
+        <i class="fa-solid fa-arrow-up-right-from-square text-white/30 text-xs flex-shrink-0"></i>
+      </a>`).join('')}
+  </div>`;
+}
+async function loadRealStandings(){
+  if(S.realStandings && !S.realStandings.loading){ _rmRerender(); return; }
+  S.realStandings={loading:true};
+  _rmRerender();
+  try{ S.realStandings = await api('/api/real_standings'); }
+  catch(e){ S.realStandings={error:'Fonte non raggiungibile',groups:[]}; }
+  _rmRerender();
+}
+function _rmStatsHtml(){
+  const d=S.realStats;
+  if(!d||d.loading) return `<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm"><i class="fa-solid fa-spinner spinner mr-2"></i>Calcolo le statistiche dalle partite giocate…</div>`;
+  if(d.error) return `<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm"><i class="fa-solid fa-triangle-exclamation mr-2" style="color:rgba(245,200,80,0.8)"></i>${d.error}</div>`;
+  const sc=d.scorers||[], as=d.assists||[], ca=d.cards||[];
+  if(!sc.length && !as.length && !ca.length) return `<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm">Nessuna statistica disponibile: serve almeno una partita conclusa con eventi dalla fonte.</div>`;
+  const rank=(rows,valKey,valFmt,medal)=>rows.map((r,i)=>`
+    <tr style="border-top:1px solid rgba(255,255,255,0.05)">
+      <td class="text-center py-2" style="width:26px"><span class="${i<3?'text-gold font-bold':'text-white/35'} text-sm">${i+1}</span></td>
+      <td class="py-2"><div class="min-w-0"><div class="text-white text-sm truncate leading-tight">${r.player}</div><div class="text-white/35 text-[11px] truncate">${r.team||''}</div></div></td>
+      <td class="text-center py-2" style="width:64px">${valFmt(r)}</td>
+    </tr>`).join('');
+  const card=(title,icon,rows,head,body)=> rows.length?`
+    <div class="glass rounded-xl p-3 mb-3">
+      <div class="text-gold text-xs font-bold uppercase tracking-wider mb-1">${icon} ${title}</div>
+      <table class="w-full" style="border-collapse:collapse">
+        <thead><tr class="text-white/30" style="font-size:10px;text-transform:uppercase">
+          <th style="width:26px">#</th><th class="text-left">Giocatore</th><th class="text-center" style="width:64px">${head}</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+      </table>
+    </div>`:'';
+  const partial = d.partial?`<div class="text-white/30 text-[11px] mb-3 px-1"><i class="fa-solid fa-circle-info mr-1"></i>Statistiche in aggiornamento: alcune partite concluse non sono ancora state conteggiate (si completano col passare dei minuti).</div>`:'';
+  return partial
+    + card('Capocannonieri','<i class="fa-solid fa-futbol mr-1"></i>',sc,'Gol',
+        rank(sc,'goals',r=>`<span class="text-white font-bold">${r.goals}</span>`))
+    + card('Assist','<i class="fa-solid fa-shoe-prints mr-1"></i>',as,'Assist',
+        rank(as,'assists',r=>`<span class="text-white font-bold">${r.assists}</span>`))
+    + card('Cartellini','<i class="fa-regular fa-square mr-1"></i>',ca,'G / R',
+        ca.map((r,i)=>`<tr style="border-top:1px solid rgba(255,255,255,0.05)">
+          <td class="text-center py-2 text-white/35 text-sm" style="width:26px">${i+1}</td>
+          <td class="py-2"><div class="min-w-0"><div class="text-white text-sm truncate leading-tight">${r.player}</div><div class="text-white/35 text-[11px] truncate">${r.team||''}</div></div></td>
+          <td class="text-center py-2" style="width:64px"><span style="color:#f4c430;font-weight:700">${r.yellow||0}</span><span class="text-white/25"> / </span><span style="color:#e8192c;font-weight:700">${r.red||0}</span></td>
+        </tr>`).join(''));
+}
+function _rmNewsTabHtml(){
+  const d=S.realStats;
+  if(!d||d.loading) return `<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm"><i class="fa-solid fa-spinner spinner mr-2"></i>Carico le ultime notizie…</div>`;
+  if(d.error) return `<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm"><i class="fa-solid fa-triangle-exclamation mr-2" style="color:rgba(245,200,80,0.8)"></i>${d.error}</div>`;
+  const news=d.news||[];
+  if(!news.length) return `<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm">Nessuna notizia disponibile dalla fonte al momento.</div>`;
+  const fmtD=(s)=>{ if(!s) return ''; const dt=new Date(s); return isNaN(dt.getTime())?'':dt.toLocaleDateString('it-IT',{day:'2-digit',month:'short'}); };
+  return `<div class="glass rounded-xl p-2">${news.map(n=>`
+    <a href="${n.url}" target="_blank" rel="noopener noreferrer" class="flex items-center gap-3 p-2 rounded-lg" style="border-bottom:1px solid rgba(255,255,255,0.05)">
+      ${n.image?`<img src="${n.image}" style="width:64px;height:46px;object-fit:cover;border-radius:6px;flex-shrink:0" onerror="this.style.display='none'">`:'<div style="width:64px;height:46px;border-radius:6px;flex-shrink:0;background:rgba(255,255,255,0.05);display:flex;align-items:center;justify-content:center"><i class="fa-regular fa-newspaper text-white/20"></i></div>'}
+      <div class="flex-1 min-w-0">
+        <div class="text-white/85 text-sm leading-tight">${n.title||''}</div>
+        ${n.date?`<div class="text-white/30 text-[11px] mt-0.5">${fmtD(n.date)}</div>`:''}
+      </div>
+      <i class="fa-solid fa-arrow-up-right-from-square text-white/25 text-xs flex-shrink-0"></i>
+    </a>`).join('')}</div>`;
+}
+async function loadRealStats(){
+  if(S.realStats && !S.realStats.loading){ _rmRerender(); return; }
+  S.realStats={loading:true};
+  _rmRerender();
+  try{ S.realStats = await api('/api/real_stats'); }
+  catch(e){ S.realStats={error:'Fonte non raggiungibile',scorers:[],assists:[],cards:[],news:[]}; }
+  _rmRerender();
 }
 function bind_realmatches(isRerender){
   bind_topbar_events();
@@ -617,8 +737,14 @@ function bind_realmatches(isRerender){
   const closeModal=()=>{ S.realModal=null; _rmRerender(); };
   document.querySelector('.rm-modal-backdrop')?.addEventListener('click', closeModal);
   document.querySelector('.rm-modal-close')?.addEventListener('click', (e)=>{ e.stopPropagation(); closeModal(); });
-  // primo caricamento (o cambio data) quando i dati non corrispondono alla data scelta
-  if(!isRerender && (!S.realData || S.realData.date!==_realDateStr())){
+  document.querySelectorAll('.rm-tab').forEach(el=>el.addEventListener('click', ()=>{
+    const t=el.dataset.tab; if(t===S.realTab) return;
+    S.realTab=t; _rmRerender();
+    if(t==='standings' && !S.realStandings) loadRealStandings();
+    else if((t==='scorers'||t==='news') && !S.realStats) loadRealStats();
+  }));
+  // primo caricamento (o cambio data) solo nella tab Partite
+  if(!isRerender && (S.realTab||'matches')==='matches' && (!S.realData || S.realData.date!==_realDateStr())){
     loadRealMatches(_realDateStr());
   }
 }

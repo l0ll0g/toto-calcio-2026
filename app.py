@@ -952,10 +952,19 @@ def _parse_match_events(raw):
         assist  = _ev_name(e.get('assist'))
         sub_in  = _ev_name(e.get('substituted'))   # giocatore che ENTRA
         note = ''
-        if 'own' in t:                              kind = 'owngoal'
-        elif 'disallow' in t or 'cancel' in t or 'annull' in t or 'var' in t: kind = 'var'
-        elif 'missed' in t:                         kind = 'missed'
-        elif 'goal' in t:                           kind = 'goal'; note = 'rig.' if 'pen' in t else ''
+        if 'own' in t:
+            kind = 'owngoal'
+        elif 'var' in t:
+            # Eventi VAR: mostriamo solo gli ANNULLAMENTI. Le conferme (VAR Goal
+            # Confirmed) e i rigori assegnati (VAR Penalty) NON si mostrano,
+            # perché il gol/rigore vero arriva come evento separato.
+            if 'cancel' in t or 'disallow' in t or 'annull' in t:
+                kind = 'var'
+            else:
+                continue
+        elif 'missed' in t:                         kind = 'missed'   # rigore sbagliato
+        elif 'goal' in t or 'penalty' in t:                           # gol o RIGORE segnato
+            kind = 'goal'; note = 'rig.' if 'pen' in t else ''
         elif 'red' in t:                            kind = 'red'
         elif 'yellow' in t:                         kind = 'yellow'
         elif 'subst' in t:                          kind = 'sub'

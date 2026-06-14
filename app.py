@@ -980,9 +980,15 @@ def _parse_match_events(raw):
             ev['off'] = player if sub_in else ''   # ESCE
         out.append(ev)
 
+    news = []
+    for n in (m.get('news') or [])[:6]:
+        if isinstance(n, dict) and n.get('title'):
+            news.append({'title': n.get('title') or '', 'url': n.get('url') or '',
+                         'image': n.get('image') or '', 'date': n.get('datePublished') or n.get('date') or ''})
+
     return {'available': bool(out),
             'home': home.get('name') or '', 'away': away.get('name') or '',
-            'events': out,
+            'events': out, 'news': news,
             'goals':  [e for e in out if e['kind'] in ('goal', 'owngoal')],
             'yellow': [e for e in out if e['kind'] == 'yellow'],
             'red':    [e for e in out if e['kind'] == 'red']}
@@ -992,18 +998,145 @@ def _real_match_detail(mid):
     now = _time.time()
     if c and now - c['ts'] < _REAL_DETAIL_TTL:
         return c['data']
-    data = {'available': False, 'goals': [], 'yellow': [], 'red': []}
-    for url in (f"{HIGHLIGHTLY_BASE}/matches/{mid}",
-                f"{HIGHLIGHTLY_BASE}/events/{mid}"):
+    data = {'available': False, 'goals': [], 'yellow': [], 'red': [], 'events': [], 'news': []}
+    try:
+        data = _parse_match_events(_hl_get_json(f"{HIGHLIGHTLY_BASE}/matches/{mid}"))
+    except Exception:
+        pass
+    if not data.get('available'):
         try:
-            parsed = _parse_match_events(_hl_get_json(url))
-            if parsed.get('available'):
-                data = parsed
-                break
+            ev = _parse_match_events(_hl_get_json(f"{HIGHLIGHTLY_BASE}/events/{mid}"))
+            if ev.get('available'):
+                ev['news'] = data.get('news') or ev.get('news') or []
+                data = ev
         except Exception:
-            continue
+            pass
     _REAL_CACHE['details'][mid] = {'ts': now, 'data': data}
     return data
+
+def _real_standings():
+    """Classifiche dei gironi del Mondiale (endpoint /standings)."""
+    wc = _wc_league_id(); season = _cfg_season()
+    key = f"st:{wc}:{season}"
+    c = _REAL_CACHE['days'].get(key); now = _time.time()
+    if c and now - c['ts'] < _REAL_DAY_TTL:
+        return c['data']
+    data = _hl_get_json(f"{HIGHLIGHTLY_BASE}/standings?leagueId={wc}&season={season}")
+    raw_groups = (data.get('groups') if isinstance(data, dict) else None) or (data if isinstance(data, list) else [])
+    groups = []
+    for g in raw_groups:
+        rows = []
+        for r in (g.get('standings') or []):
+            tot = r.get('total') or {}
+            team = r.get('team') or {}
+            gf = tot.get('scoredGoals'); gs = tot.get('receivedGoals')
+            rows.append({'position': r.get('position'),
+                         'team': team.get('name') or '', 'logo': team.get('logo') or '',
+                         'played': tot.get('games'), 'win': tot.get('wins'),
+                         'draw': tot.get('draws'), 'loss': tot.get('loses'),
+                         'gf': gf, 'gs': gs,
+                         'gd': (gf or 0) - (gs or 0), 'points': r.get('points')})
+        rows.sort(key=lambda x: (x['position'] if x['position'] is not None else 99))
+        groups.append({'name': g.get('name') or 'Girone', 'rows': rows})
+    out = {'groups': groups}
+    _REAL_CACHE['days'][key] = {'ts': now, 'data': out}
+    return out
+
+# ---- Statistiche torneo (capocannonieri, assist, cartellini, notizie) -------
+# Highlightly non offre un endpoint "classifica marcatori": lo costruiamo
+# aggregando gli eventi delle partite GIA' CONCLUSE. Per non sforare il piano
+# gratuito: ogni partita finita viene elaborata UNA volta e conservata; le
+# giornate completamente concluse non vengono più riscaricate; tetto di nuove
+# richieste per ricostruzione.
+_REAL_STATS = {'matches': {}, 'done_dates': set(), 'agg': None, 'agg_ts': 0}
+_REAL_STATS_TTL = 600          # 10 min tra una ricostruzione e l'altra
+_REAL_STATS_FETCH_CAP = 25     # max nuove partite scaricate per ricostruzione
+
+def _tally_from_detail(det, row):
+    t = {'goals': [], 'assists': [], 'cards': [], 'news': []}
+    if det and det.get('events'):
+        hname = det.get('home') or (row or {}).get('home') or ''
+        aname = det.get('away') or (row or {}).get('away') or ''
+        for e in det['events']:
+            team = hname if e.get('side') == 'home' else aname
+            k = e.get('kind')
+            if k == 'goal':
+                if e.get('player'): t['goals'].append((e['player'], team))
+                if e.get('assist'): t['assists'].append((e['assist'], team))
+            elif k == 'red':
+                if e.get('player'): t['cards'].append((e['player'], team, 'red'))
+            elif k == 'yellow':
+                if e.get('player'): t['cards'].append((e['player'], team, 'yellow'))
+    if det and det.get('news'):
+        t['news'] = det['news']
+    return t
+
+def _real_stats():
+    now = _time.time()
+    if _REAL_STATS['agg'] is not None and now - _REAL_STATS['agg_ts'] < _REAL_STATS_TTL:
+        return _REAL_STATS['agg']
+    today = _time.strftime('%Y-%m-%d', _time.gmtime())
+    dates = sorted({d for d in WC_MATCH_DATES.values() if d <= today})
+    per_date = {}
+    for d in dates:
+        if d in _REAL_STATS['done_dates']:
+            continue
+        try:
+            rows = _real_day_matches(d)
+        except Exception:
+            rows = []
+        fin = [str(r['id']) for r in rows if r.get('status') == 'FINISHED' and r.get('id') is not None]
+        rowmap = {str(r['id']): r for r in rows if r.get('id') is not None}
+        per_date[d] = {'total': len(rows), 'finished': fin, 'rowmap': rowmap}
+    # scarica i dettagli delle partite finite non ancora elaborate (con tetto)
+    fetched = 0
+    for d, info in per_date.items():
+        if fetched >= _REAL_STATS_FETCH_CAP:
+            break
+        for mid in info['finished']:
+            if mid in _REAL_STATS['matches']:
+                continue
+            if fetched >= _REAL_STATS_FETCH_CAP:
+                break
+            try:
+                det = _real_match_detail(mid)
+            except Exception:
+                det = None
+            fetched += 1
+            _REAL_STATS['matches'][mid] = _tally_from_detail(det, info['rowmap'].get(mid))
+    # marca come "concluse" le giornate interamente finite ed elaborate
+    for d, info in per_date.items():
+        if info['total'] > 0 and len(info['finished']) == info['total'] \
+           and all(mid in _REAL_STATS['matches'] for mid in info['finished']):
+            _REAL_STATS['done_dates'].add(d)
+    # aggrega su tutte le partite elaborate
+    gmap, amap, cmap, news = {}, {}, {}, []
+    for t in _REAL_STATS['matches'].values():
+        for (p, tm) in t['goals']:
+            r = gmap.setdefault((p, tm), {'player': p, 'team': tm, 'goals': 0}); r['goals'] += 1
+        for (p, tm) in t['assists']:
+            r = amap.setdefault((p, tm), {'player': p, 'team': tm, 'assists': 0}); r['assists'] += 1
+        for (p, tm, col) in t['cards']:
+            r = cmap.setdefault((p, tm), {'player': p, 'team': tm, 'yellow': 0, 'red': 0}); r[col] += 1
+        news.extend(t['news'] or [])
+    scorers = sorted(gmap.values(), key=lambda x: (-x['goals'], x['player']))[:30]
+    assists = sorted(amap.values(), key=lambda x: (-x['assists'], x['player']))[:20]
+    cards = sorted(cmap.values(), key=lambda x: (-(x['red'] * 2 + x['yellow']), x['player']))[:20]
+    seen, uniq = set(), []
+    for n in news:
+        k = (n.get('url') or '') + '|' + (n.get('title') or '')
+        if not k.strip('|') or k in seen:
+            continue
+        seen.add(k); uniq.append(n)
+    uniq.sort(key=lambda n: n.get('date') or '', reverse=True)
+    pending = sum(1 for info in per_date.values()
+                  for mid in info['finished'] if mid not in _REAL_STATS['matches'])
+    out = {'scorers': scorers, 'assists': assists, 'cards': cards, 'news': uniq[:25],
+           'processed': len(_REAL_STATS['matches']),
+           'pending': pending, 'partial': pending > 0}
+    _REAL_STATS['agg'] = out
+    _REAL_STATS['agg_ts'] = now
+    return out
 
 def _hl_status(desc):
     """Mappa lo stato Highlightly (state.description) ai nostri 3 stati."""
@@ -1370,6 +1503,30 @@ def api_real_match(mid):
         return jsonify(_real_match_detail(mid))
     except Exception as e:
         return jsonify({'available': False, 'error': str(e), 'goals': [], 'yellow': [], 'red': []})
+
+@app.route('/api/real_standings')
+@login_required
+def api_real_standings():
+    """Classifiche dei gironi del Mondiale."""
+    if not LIVE_ENABLED:
+        return jsonify({'error': 'Fonte non configurata (HIGHLIGHTLY_KEY mancante)', 'groups': []})
+    try:
+        return jsonify(_real_standings())
+    except Exception as e:
+        return jsonify({'error': 'Fonte non raggiungibile: ' + str(e), 'groups': []})
+
+@app.route('/api/real_stats')
+@login_required
+def api_real_stats():
+    """Capocannonieri, assist, cartellini e ultime notizie del Mondiale."""
+    if not LIVE_ENABLED:
+        return jsonify({'error': 'Fonte non configurata (HIGHLIGHTLY_KEY mancante)',
+                        'scorers': [], 'assists': [], 'cards': [], 'news': []})
+    try:
+        return jsonify(_real_stats())
+    except Exception as e:
+        return jsonify({'error': 'Fonte non raggiungibile: ' + str(e),
+                        'scorers': [], 'assists': [], 'cards': [], 'news': []})
 
 @app.route('/api/admin/live_config', methods=['GET'])
 @login_required

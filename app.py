@@ -1159,19 +1159,24 @@ def _pos_label(p):
 def _parse_lineup_side(side):
     if not isinstance(side, dict):
         return None
-    starters = []
+    starters, lines = [], []
     for row in (side.get('initialLineup') or []):
+        line = []
         for p in (row or []):
             if isinstance(p, dict) and p.get('name'):
-                starters.append({'name': p.get('name'), 'number': p.get('number'),
-                                 'pos': _pos_label(p.get('position'))})
+                pl = {'name': p.get('name'), 'number': p.get('number'),
+                      'pos': _pos_label(p.get('position'))}
+                line.append(pl)
+                starters.append(pl)
+        if line:
+            lines.append(line)
     subs = []
     for p in (side.get('substitutes') or []):
         if isinstance(p, dict) and p.get('name'):
             subs.append({'name': p.get('name'), 'number': p.get('number'),
                          'pos': _pos_label(p.get('position'))})
     return {'name': side.get('name') or '', 'formation': side.get('formation') or '',
-            'starters': starters, 'subs': subs}
+            'starters': starters, 'lines': lines, 'subs': subs}
 
 def _parse_lineup(raw):
     d = raw

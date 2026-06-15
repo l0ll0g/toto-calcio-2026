@@ -9,7 +9,7 @@ let S = {
   wcTab:'groups', wcGroup:'A', wcKoRound:0,
   selAvatar:'⚽', authMode:'login', authSubMode:'login', // authSubMode: login|register|forgot|reset
   myLeagues:[], activeLeague:null, activeLeagueId:null,
-  realDate:null, realData:null, realDetails:{}, realModal:null, realTab:'matches', realStandings:null, realStats:null,
+  realDate:null, realData:null, realDetails:{}, realModal:null, realTab:'matches', realStandings:null, realStats:null, realLineups:{}, realModalTab:'summary', teamLineup:{},
   topcorer:'', finalPred:{}, koPred:{}, koSubmitted:false,
   live:{matches:{},simulation:true,enabled:false}, _liveTimer:null,
   profileData:null,
@@ -605,8 +605,10 @@ function _rmModalHtml(){
           <div class="flex-1 flex items-center gap-2 text-left">${lf(m.away_logo)}<span class="text-white font-semibold leading-tight">${m.away}</span></div>
         </div>
         <div class="text-center text-white/30 text-xs mb-3">${st}</div>
-        ${_rmTimelineHtml(id)}
-        ${_rmNewsHtml(id)}
+        ${(()=>{ const mt=S.realModalTab||'summary';
+          const b=(id,label)=>`<button class="rm-mtab flex-1 py-1.5 rounded-lg text-xs font-bold" data-mtab="${id}" style="${mt===id?'background:rgba(200,164,74,0.15);border:1px solid rgba(200,164,74,0.3);color:#C8A44A':'background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);color:rgba(255,255,255,0.5)'}">${label}</button>`;
+          return `<div class="flex gap-2 mb-3">${b('summary','Sintesi')}${b('lineup','Formazioni')}</div>`; })()}
+        ${(S.realModalTab||'summary')==='lineup' ? _rmLineupHtml(id) : `${_rmTimelineHtml(id)}${_rmNewsHtml(id)}`}
       </div>
     </div>
   </div>`;
@@ -723,6 +725,33 @@ async function loadRealStats(){
   catch(e){ S.realStats={error:'Fonte non raggiungibile',scorers:[],assists:[],cards:[],news:[]}; }
   _rmRerender();
 }
+const _POSCOL={POR:'#f59e0b',DIF:'#3b82f6',CEN:'#8b5cf6',ATT:'#ef4444'};
+function _rmLineupHtml(id){
+  const d=S.realLineups[id];
+  if(!d||d.loading) return `<div class="text-white/30 text-xs py-4 text-center"><i class="fa-solid fa-spinner spinner mr-1"></i>Carico le formazioni…</div>`;
+  if(d.error) return `<div class="text-red-300/70 text-xs py-4 text-center">${d.error}</div>`;
+  if(!d.available || (!(d.home&&d.home.starters&&d.home.starters.length)&&!(d.away&&d.away.starters&&d.away.starters.length)))
+    return `<div class="text-white/30 text-xs py-4 text-center">Formazioni non ancora disponibili dalla fonte (di solito escono ~30 min prima del calcio d'inizio).</div>`;
+  const col=(side,right)=>{
+    if(!side) return '<div class="flex-1"></div>';
+    const chip=(p)=>`<div class="flex items-center gap-1.5 py-0.5 ${right?'flex-row-reverse text-right':''}">
+        <span class="text-[9px] font-bold px-1 rounded flex-shrink-0" style="background:${(_POSCOL[p.pos]||'#888')}22;color:${_POSCOL[p.pos]||'#aaa'}">${p.pos||'-'}</span>
+        <span class="text-white text-xs truncate min-w-0">${p.number!=null?`<span class="text-white/35">${p.number}</span> `:''}${p.name}</span></div>`;
+    return `<div class="flex-1 min-w-0">
+      <div class="text-white/85 text-xs font-bold mb-1 ${right?'text-right':''}">${side.name||''} ${side.formation?`<span class="text-gold">${side.formation}</span>`:''}</div>
+      ${(side.starters||[]).map(chip).join('')}
+      ${(side.subs&&side.subs.length)?`<div class="text-white/25 text-[10px] uppercase tracking-wider mt-2 mb-0.5 ${right?'text-right':''}">Panchina</div>${side.subs.map(chip).join('')}`:''}
+    </div>`;
+  };
+  return `<div class="flex gap-3 mt-1">${col(d.home,false)}<div class="w-px flex-shrink-0" style="background:rgba(255,255,255,0.08)"></div>${col(d.away,true)}</div>`;
+}
+async function loadRealLineup(id){
+  if(S.realLineups[id] && !S.realLineups[id].loading){ _rmRerender(); return; }
+  S.realLineups[id]={loading:true}; _rmRerender();
+  try{ S.realLineups[id]=await api('/api/real_lineup/'+encodeURIComponent(id)); }
+  catch(e){ S.realLineups[id]={available:false,error:'Errore di rete'}; }
+  _rmRerender();
+}
 function bind_realmatches(isRerender){
   bind_topbar_events();
   document.getElementById('rm-prev')?.addEventListener('click', ()=>loadRealMatches(_shiftDate(_realDateStr(),-1)));
@@ -731,8 +760,14 @@ function bind_realmatches(isRerender){
   document.querySelectorAll('.rm-match').forEach(el=>el.addEventListener('click', ()=>{
     const id=el.dataset.id;
     S.realModal=id;
+    S.realModalTab='summary';
     loadRealDetail(id);   // ricarica/mostra il popup (re-render dentro)
     _rmRerender();
+  }));
+  document.querySelectorAll('.rm-mtab').forEach(el=>el.addEventListener('click', ()=>{
+    const t=el.dataset.mtab; if(t===(S.realModalTab||'summary')) return;
+    S.realModalTab=t; _rmRerender();
+    if(t==='lineup' && S.realModal && !S.realLineups[S.realModal]) loadRealLineup(S.realModal);
   }));
   const closeModal=()=>{ S.realModal=null; _rmRerender(); };
   document.querySelector('.rm-modal-backdrop')?.addEventListener('click', closeModal);
@@ -3148,6 +3183,44 @@ function html_teams() {
   </div>`;
 }
 
+function _teamLineupCardHtml(team){
+  const d=S.teamLineup[team];
+  const wrap=(inner)=>`<div class="glass rounded-2xl p-4 mb-4"><div class="text-gold text-xs font-bold uppercase tracking-wider mb-2"><i class="fa-solid fa-clipboard-list mr-1"></i>Formazione probabile (live)</div>${inner}</div>`;
+  if(!d || d.loading) return wrap(`<div class="text-white/40 text-sm py-1"><i class="fa-solid fa-spinner spinner mr-2"></i>Cerco la formazione dalla fonte…</div>`);
+  if(d.error) return wrap(`<div class="text-white/40 text-sm py-1"><i class="fa-solid fa-circle-info mr-1"></i>${d.error}</div>`);
+  if(!d.available){
+    const note=(d.reason==='no_match')
+      ? "Nessuna partita trovata dalla fonte per questa nazionale."
+      : "Non ancora pubblicata dalla fonte (di solito esce ~30 min prima del calcio d'inizio). Qui sotto c'è la probabile statica.";
+    return wrap(`<div class="text-white/40 text-sm py-1"><i class="fa-solid fa-circle-info mr-1"></i>${note}</div>`);
+  }
+  const side = d.side==='away' ? d.away : d.home;
+  const m=d.match||{};
+  const opp = d.side==='away' ? m.home : m.away;
+  if(!side || !(side.starters||[]).length) return wrap(`<div class="text-white/40 text-sm py-1">Formazione non disponibile.</div>`);
+  const chip=(p)=>`<div class="flex items-center gap-2 py-1">
+     <span class="text-[10px] font-bold px-1.5 py-0.5 rounded w-9 text-center flex-shrink-0" style="background:${(_POSCOL[p.pos]||'#888')}22;color:${_POSCOL[p.pos]||'#aaa'};border:1px solid ${(_POSCOL[p.pos]||'#888')}44">${p.pos||'-'}</span>
+     ${p.number!=null?`<span class="text-white/40 text-xs w-5 text-right flex-shrink-0">${p.number}</span>`:''}
+     <span class="text-white text-sm truncate min-w-0">${p.name}</span></div>`;
+  const subs=(side.subs&&side.subs.length)
+    ? `<div class="text-white/30 text-[11px] uppercase tracking-wider mt-3 mb-1">Panchina</div><div class="flex flex-wrap gap-1">${side.subs.map(p=>`<span class="text-xs px-2 py-0.5 rounded-full text-white/55" style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08)">${p.number!=null?p.number+' ':''}${p.name}</span>`).join('')}</div>`
+    : '';
+  return wrap(`
+    <div class="flex items-center justify-between mb-2">
+      <div class="font-display text-lg text-white">${side.formation||'—'}</div>
+      <div class="text-white/35 text-xs text-right">${opp?('vs '+opp):''}${m.date?` · ${m.date}`:''}</div>
+    </div>
+    <div>${side.starters.map(chip).join('')}</div>
+    ${subs}`);
+}
+async function loadTeamLineup(team){
+  if(S.teamLineup[team]!==undefined && !S.teamLineup[team].loading) return;
+  S.teamLineup[team]={loading:true};
+  render();
+  try{ S.teamLineup[team]=await api('/api/real_team_lineup?team='+encodeURIComponent(team)); }
+  catch(e){ S.teamLineup[team]={available:false,error:'Errore di rete'}; }
+  render();
+}
 function html_teamDetail(teamName) {
   const sq = WC_SQUADS[teamName];
   if (!sq) return '<div class="p-8 text-center text-white/40">Dati non disponibili</div>';
@@ -3179,6 +3252,9 @@ function html_teamDetail(teamName) {
           </div>
         </div>
       </div>
+
+      <!-- Formazione live (Highlightly) -->
+      ${_teamLineupCardHtml(teamName)}
 
       <!-- Two-column layout: player list LEFT + pitch RIGHT -->
       <div class="grid lg:grid-cols-2 gap-4">
@@ -3392,6 +3468,7 @@ function bind_teams() {
   document.querySelectorAll('.team-card-btn').forEach(btn => {
     btn.addEventListener('click', () => { S.teamsTeam=btn.dataset.team; render(); });
   });
+  if(S.teamsTeam && S.teamLineup[S.teamsTeam]===undefined) loadTeamLineup(S.teamsTeam);
   // Clickable player rows (left list) + pitch players → open modal
   document.querySelectorAll('.player-row, .pitch-player').forEach(el => {
     el.addEventListener('click', () => {

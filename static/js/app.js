@@ -9,7 +9,7 @@ let S = {
   wcTab:'groups', wcGroup:'A', wcKoRound:0,
   selAvatar:'⚽', authMode:'login', authSubMode:'login', // authSubMode: login|register|forgot|reset
   myLeagues:[], activeLeague:null, activeLeagueId:null,
-  realDate:null, realData:null, realDetails:{}, realModal:null, realTab:'matches', realStandings:null, realStats:null, realLineups:{}, realModalTab:'summary', teamLineup:{},
+  realDate:null, realData:null, realDetails:{}, realModal:null, realTab:'matches', realStandings:null, realStats:null, realLineups:{}, realModalTab:'summary', realLineupView:'pitch', teamLineup:{},
   topcorer:'', finalPred:{}, koPred:{}, koSubmitted:false,
   live:{matches:{},simulation:true,enabled:false}, _liveTimer:null,
   profileData:null,
@@ -726,24 +726,70 @@ async function loadRealStats(){
   _rmRerender();
 }
 const _POSCOL={POR:'#f59e0b',DIF:'#3b82f6',CEN:'#8b5cf6',ATT:'#ef4444'};
+function _lastName(n){ n=(n||'').trim(); const parts=n.split(/\s+/); return parts.length>1?parts[parts.length-1]:n; }
+function _pitchPlayer(p,x,y){
+  const col=_POSCOL[p.pos]||'#9aa3b2';
+  return `<div style="position:absolute;left:${x}%;top:${y}%;transform:translate(-50%,-50%);width:58px;text-align:center;pointer-events:none">
+    <div style="width:30px;height:30px;border-radius:50%;margin:0 auto;display:flex;align-items:center;justify-content:center;background:${col};color:#0b1220;font-weight:800;font-size:12px;box-shadow:0 2px 6px rgba(0,0,0,.45);border:1.5px solid rgba(255,255,255,.85)">${p.number!=null?p.number:''}</div>
+    <div style="font-size:9px;color:#fff;line-height:1.1;margin-top:2px;text-shadow:0 1px 2px rgba(0,0,0,.9);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_lastName(p.name)}</div>
+  </div>`;
+}
+function _pitchNodes(lines,yGK,yLast,reverseX){
+  const L=(lines||[]).length; if(!L) return '';
+  return lines.map((row,i)=>{
+    const y=(L===1)?yGK:(yGK+(yLast-yGK)*(i/(L-1)));
+    const k=row.length;
+    return row.map((p,j)=>{ let x=(j+1)/(k+1)*100; if(reverseX) x=100-x; return _pitchPlayer(p,x,y); }).join('');
+  }).join('');
+}
+function _pitchMarkings(){
+  return `<div style="position:absolute;left:0;right:0;top:50%;height:1px;background:rgba(255,255,255,.22)"></div>
+    <div style="position:absolute;left:50%;top:50%;width:64px;height:64px;border:1px solid rgba(255,255,255,.22);border-radius:50%;transform:translate(-50%,-50%)"></div>
+    <div style="position:absolute;left:50%;top:50%;width:5px;height:5px;background:rgba(255,255,255,.35);border-radius:50%;transform:translate(-50%,-50%)"></div>
+    <div style="position:absolute;left:25%;right:25%;top:0;height:11%;border:1px solid rgba(255,255,255,.18);border-top:none;border-radius:0 0 6px 6px"></div>
+    <div style="position:absolute;left:25%;right:25%;bottom:0;height:11%;border:1px solid rgba(255,255,255,.18);border-bottom:none;border-radius:6px 6px 0 0"></div>`;
+}
+function _pitchWrap(inner,h){
+  return `<div style="position:relative;width:100%;height:${h}px;border-radius:14px;overflow:hidden;background:repeating-linear-gradient(180deg,#1c7d3e 0,#1c7d3e 9%,#1a7239 9%,#1a7239 18%);border:1px solid rgba(255,255,255,.12)">
+    ${_pitchMarkings()}${inner}</div>`;
+}
+function _pitchBoth(home,away){
+  const inner=(home?_pitchNodes(home.lines,95,56,false):'')+(away?_pitchNodes(away.lines,5,44,true):'');
+  return _pitchWrap(inner,440);
+}
+function _pitchOne(side){
+  return _pitchWrap(_pitchNodes(side.lines,92,14,false),360);
+}
 function _rmLineupHtml(id){
   const d=S.realLineups[id];
   if(!d||d.loading) return `<div class="text-white/30 text-xs py-4 text-center"><i class="fa-solid fa-spinner spinner mr-1"></i>Carico le formazioni…</div>`;
   if(d.error) return `<div class="text-red-300/70 text-xs py-4 text-center">${d.error}</div>`;
-  if(!d.available || (!(d.home&&d.home.starters&&d.home.starters.length)&&!(d.away&&d.away.starters&&d.away.starters.length)))
+  const hasHome=d.home&&(d.home.starters||[]).length, hasAway=d.away&&(d.away.starters||[]).length;
+  if(!d.available || (!hasHome&&!hasAway))
     return `<div class="text-white/30 text-xs py-4 text-center">Formazioni non ancora disponibili dalla fonte (di solito escono ~30 min prima del calcio d'inizio).</div>`;
-  const col=(side,right)=>{
-    if(!side) return '<div class="flex-1"></div>';
-    const chip=(p)=>`<div class="flex items-center gap-1.5 py-0.5 ${right?'flex-row-reverse text-right':''}">
-        <span class="text-[9px] font-bold px-1 rounded flex-shrink-0" style="background:${(_POSCOL[p.pos]||'#888')}22;color:${_POSCOL[p.pos]||'#aaa'}">${p.pos||'-'}</span>
-        <span class="text-white text-xs truncate min-w-0">${p.number!=null?`<span class="text-white/35">${p.number}</span> `:''}${p.name}</span></div>`;
-    return `<div class="flex-1 min-w-0">
-      <div class="text-white/85 text-xs font-bold mb-1 ${right?'text-right':''}">${side.name||''} ${side.formation?`<span class="text-gold">${side.formation}</span>`:''}</div>
-      ${(side.starters||[]).map(chip).join('')}
-      ${(side.subs&&side.subs.length)?`<div class="text-white/25 text-[10px] uppercase tracking-wider mt-2 mb-0.5 ${right?'text-right':''}">Panchina</div>${side.subs.map(chip).join('')}`:''}
-    </div>`;
-  };
-  return `<div class="flex gap-3 mt-1">${col(d.home,false)}<div class="w-px flex-shrink-0" style="background:rgba(255,255,255,0.08)"></div>${col(d.away,true)}</div>`;
+  const view=S.realLineupView||'pitch';
+  const hasLines=(d.home&&(d.home.lines||[]).length)||(d.away&&(d.away.lines||[]).length);
+  const tb=(idv,label)=>`<button class="rm-lview flex-1 py-1.5 rounded-lg text-xs font-bold" data-view="${idv}" style="${view===idv?'background:rgba(200,164,74,0.15);border:1px solid rgba(200,164,74,0.3);color:#C8A44A':'background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);color:rgba(255,255,255,0.5)'}">${label}</button>`;
+  const toggle=hasLines?`<div class="flex gap-2 mb-2">${tb('pitch','Campo')}${tb('list','Lista')}</div>`:'';
+  let body;
+  if(view==='pitch' && hasLines){
+    const frm=(s)=> s?`${s.name||''} ${s.formation?`<span class="text-gold">${s.formation}</span>`:''}`:'';
+    body=`<div class="flex items-center justify-between text-xs text-white/70 font-bold mb-1 px-1"><span class="truncate">${frm(d.home)}</span><span class="text-right truncate">${frm(d.away)}</span></div>${_pitchBoth(d.home,d.away)}`;
+  } else {
+    const col=(side,right)=>{
+      if(!side) return '<div class="flex-1"></div>';
+      const chip=(p)=>`<div class="flex items-center gap-1.5 py-0.5 ${right?'flex-row-reverse text-right':''}">
+          <span class="text-[9px] font-bold px-1 rounded flex-shrink-0" style="background:${(_POSCOL[p.pos]||'#888')}22;color:${_POSCOL[p.pos]||'#aaa'}">${p.pos||'-'}</span>
+          <span class="text-white text-xs truncate min-w-0">${p.number!=null?`<span class="text-white/35">${p.number}</span> `:''}${p.name}</span></div>`;
+      return `<div class="flex-1 min-w-0">
+        <div class="text-white/85 text-xs font-bold mb-1 ${right?'text-right':''}">${side.name||''} ${side.formation?`<span class="text-gold">${side.formation}</span>`:''}</div>
+        ${(side.starters||[]).map(chip).join('')}
+        ${(side.subs&&side.subs.length)?`<div class="text-white/25 text-[10px] uppercase tracking-wider mt-2 mb-0.5 ${right?'text-right':''}">Panchina</div>${side.subs.map(chip).join('')}`:''}
+      </div>`;
+    };
+    body=`<div class="flex gap-3 mt-1">${col(d.home,false)}<div class="w-px flex-shrink-0" style="background:rgba(255,255,255,0.08)"></div>${col(d.away,true)}</div>`;
+  }
+  return toggle+body;
 }
 async function loadRealLineup(id){
   if(S.realLineups[id] && !S.realLineups[id].loading){ _rmRerender(); return; }
@@ -768,6 +814,10 @@ function bind_realmatches(isRerender){
     const t=el.dataset.mtab; if(t===(S.realModalTab||'summary')) return;
     S.realModalTab=t; _rmRerender();
     if(t==='lineup' && S.realModal && !S.realLineups[S.realModal]) loadRealLineup(S.realModal);
+  }));
+  document.querySelectorAll('.rm-lview').forEach(el=>el.addEventListener('click', ()=>{
+    const v=el.dataset.view; if(v===(S.realLineupView||'pitch')) return;
+    S.realLineupView=v; _rmRerender();
   }));
   const closeModal=()=>{ S.realModal=null; _rmRerender(); };
   document.querySelector('.rm-modal-backdrop')?.addEventListener('click', closeModal);
@@ -3218,7 +3268,7 @@ function _teamLineupCardHtml(team){
       <div class="font-display text-lg text-white">${side.formation||'—'}</div>
       <div class="text-white/35 text-xs text-right">${srcLabel}${opp?(' · vs '+opp):''}${m.date?` · ${m.date}`:''}</div>
     </div>
-    <div>${side.starters.map(chip).join('')}</div>
+    ${(side.lines||[]).length ? _pitchOne(side) : `<div>${side.starters.map(chip).join('')}</div>`}
     ${subs}`);
 }
 async function loadTeamLineup(team){

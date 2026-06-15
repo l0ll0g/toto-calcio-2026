@@ -3185,19 +3185,27 @@ function html_teams() {
 
 function _teamLineupCardHtml(team){
   const d=S.teamLineup[team];
-  const wrap=(inner)=>`<div class="glass rounded-2xl p-4 mb-4"><div class="text-gold text-xs font-bold uppercase tracking-wider mb-2"><i class="fa-solid fa-clipboard-list mr-1"></i>Formazione probabile (live)</div>${inner}</div>`;
+  const sq=(typeof WC_SQUADS!=='undefined')?WC_SQUADS[team]:null;
+  const wrap=(inner)=>`<div class="glass rounded-2xl p-4 mb-4"><div class="text-gold text-xs font-bold uppercase tracking-wider mb-2"><i class="fa-solid fa-clipboard-list mr-1"></i>Formazione probabile</div>${inner}</div>`;
+  const staticBlock=(note)=>{
+    if(!sq || !(sq.starting11||[]).length)
+      return `<div class="text-white/40 text-sm py-1"><i class="fa-solid fa-circle-info mr-1"></i>${note||'Formazione non disponibile.'}</div>`;
+    return `${note?`<div class="text-white/35 text-xs mb-2"><i class="fa-solid fa-circle-info mr-1"></i>${note}</div>`:''}
+      <div class="flex items-center justify-between mb-2"><div class="font-display text-lg text-white">${sq.formation||'—'}</div><div class="text-white/35 text-xs">probabile statica</div></div>
+      <div class="flex flex-wrap gap-1">${(sq.starting11||[]).slice(0,11).map(n=>`<span class="text-xs px-2 py-0.5 rounded-full text-white/70" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1)">${n}</span>`).join('')}</div>`;
+  };
   if(!d || d.loading) return wrap(`<div class="text-white/40 text-sm py-1"><i class="fa-solid fa-spinner spinner mr-2"></i>Cerco la formazione dalla fonte…</div>`);
-  if(d.error) return wrap(`<div class="text-white/40 text-sm py-1"><i class="fa-solid fa-circle-info mr-1"></i>${d.error}</div>`);
+  if(d.error) return wrap(staticBlock('Fonte non raggiungibile: mostro la probabile statica.'));
   if(!d.available){
-    const note=(d.reason==='no_match')
-      ? "Nessuna partita trovata dalla fonte per questa nazionale."
-      : "Non ancora pubblicata dalla fonte (di solito esce ~30 min prima del calcio d'inizio). Qui sotto c'è la probabile statica.";
-    return wrap(`<div class="text-white/40 text-sm py-1"><i class="fa-solid fa-circle-info mr-1"></i>${note}</div>`);
+    const note=(d.reason==='no_fixtures')?'Nessuna partita trovata per questa nazionale dalla fonte.'
+      :'Formazione live non ancora disponibile dalla fonte: mostro la probabile statica.';
+    return wrap(staticBlock(note));
   }
   const side = d.side==='away' ? d.away : d.home;
   const m=d.match||{};
   const opp = d.side==='away' ? m.home : m.away;
-  if(!side || !(side.starters||[]).length) return wrap(`<div class="text-white/40 text-sm py-1">Formazione non disponibile.</div>`);
+  if(!side || !(side.starters||[]).length) return wrap(staticBlock('Formazione live non disponibile: mostro la probabile statica.'));
+  const srcLabel = d.source==='live' ? 'formazione ufficiale' : 'dall’ultima partita';
   const chip=(p)=>`<div class="flex items-center gap-2 py-1">
      <span class="text-[10px] font-bold px-1.5 py-0.5 rounded w-9 text-center flex-shrink-0" style="background:${(_POSCOL[p.pos]||'#888')}22;color:${_POSCOL[p.pos]||'#aaa'};border:1px solid ${(_POSCOL[p.pos]||'#888')}44">${p.pos||'-'}</span>
      ${p.number!=null?`<span class="text-white/40 text-xs w-5 text-right flex-shrink-0">${p.number}</span>`:''}
@@ -3208,7 +3216,7 @@ function _teamLineupCardHtml(team){
   return wrap(`
     <div class="flex items-center justify-between mb-2">
       <div class="font-display text-lg text-white">${side.formation||'—'}</div>
-      <div class="text-white/35 text-xs text-right">${opp?('vs '+opp):''}${m.date?` · ${m.date}`:''}</div>
+      <div class="text-white/35 text-xs text-right">${srcLabel}${opp?(' · vs '+opp):''}${m.date?` · ${m.date}`:''}</div>
     </div>
     <div>${side.starters.map(chip).join('')}</div>
     ${subs}`);

@@ -1147,6 +1147,88 @@ def _real_stats():
     _REAL_STATS['agg_ts'] = now
     return out
 
+# ---- Formazioni (probabili/ufficiali) via endpoint /lineups/{matchId} --------
+def _pos_label(p):
+    p = (p or '').lower()
+    if 'keeper' in p or p == 'gk': return 'POR'
+    if 'def' in p: return 'DIF'
+    if 'mid' in p: return 'CEN'
+    if any(k in p for k in ('forward', 'att', 'strik', 'wing')): return 'ATT'
+    return ''
+
+def _parse_lineup_side(side):
+    if not isinstance(side, dict):
+        return None
+    starters = []
+    for row in (side.get('initialLineup') or []):
+        for p in (row or []):
+            if isinstance(p, dict) and p.get('name'):
+                starters.append({'name': p.get('name'), 'number': p.get('number'),
+                                 'pos': _pos_label(p.get('position'))})
+    subs = []
+    for p in (side.get('substitutes') or []):
+        if isinstance(p, dict) and p.get('name'):
+            subs.append({'name': p.get('name'), 'number': p.get('number'),
+                         'pos': _pos_label(p.get('position'))})
+    return {'name': side.get('name') or '', 'formation': side.get('formation') or '',
+            'starters': starters, 'subs': subs}
+
+def _parse_lineup(raw):
+    d = raw
+    if isinstance(d, list):
+        d = d[0] if d else {}
+    if isinstance(d, dict) and isinstance(d.get('data'), dict):
+        d = d['data']
+    if not isinstance(d, dict):
+        d = {}
+    home = _parse_lineup_side(d.get('homeTeam'))
+    away = _parse_lineup_side(d.get('awayTeam'))
+    avail = bool((home and home['starters']) or (away and away['starters']))
+    return {'available': avail, 'home': home, 'away': away}
+
+def _real_match_lineup(mid):
+    _REAL_CACHE.setdefault('lineups', {})
+    c = _REAL_CACHE['lineups'].get(mid); now = _time.time()
+    if c and now - c['ts'] < 600:
+        return c['data']
+    data = {'available': False, 'home': None, 'away': None}
+    try:
+        data = _parse_lineup(_hl_get_json(f"{HIGHLIGHTLY_BASE}/lineups/{mid}"))
+    except Exception:
+        pass
+    _REAL_CACHE['lineups'][mid] = {'ts': now, 'data': data}
+    return data
+
+def _team_next_match(team):
+    """Trova la partita del Mondiale più rilevante per una nazionale (la prossima
+    in programma; se nessuna, l'ultima giocata) e l'id Highlightly su quella data."""
+    today = _time.strftime('%Y-%m-%d', _time.gmtime())
+    fixtures = []
+    for grp in WC_MATCH_SCHEDULE.values():
+        for m in grp:
+            if m['home'] == team or m['away'] == team:
+                d = WC_MATCH_DATES.get(m['id'])
+                if d:
+                    fixtures.append((d, m))
+    if not fixtures:
+        return None
+    fixtures.sort(key=lambda x: x[0])
+    upcoming = [f for f in fixtures if f[0] >= today]
+    target = upcoming[0] if upcoming else fixtures[-1]
+    date = target[0]
+    talias = _norm(_alias(team))
+    try:
+        rows = _real_day_matches(date)
+    except Exception:
+        rows = []
+    for r in rows:
+        nh, na = _norm(r.get('home', '')), _norm(r.get('away', ''))
+        if talias and talias == nh:
+            return {'mid': str(r.get('id')), 'side': 'home', 'row': r, 'date': date}
+        if talias and talias == na:
+            return {'mid': str(r.get('id')), 'side': 'away', 'row': r, 'date': date}
+    return {'mid': None, 'side': None, 'row': None, 'date': date}
+
 def _hl_status(desc):
     """Mappa lo stato Highlightly (state.description) ai nostri 3 stati."""
     d = (desc or '').lower()
@@ -1536,6 +1618,41 @@ def api_real_stats():
     except Exception as e:
         return jsonify({'error': 'Fonte non raggiungibile: ' + str(e),
                         'scorers': [], 'assists': [], 'cards': [], 'news': []})
+
+@app.route('/api/real_lineup/<path:mid>')
+@login_required
+def api_real_lineup(mid):
+    """Formazioni (probabili/ufficiali) di una partita."""
+    if not LIVE_ENABLED:
+        return jsonify({'available': False, 'error': 'Fonte non configurata'})
+    try:
+        return jsonify(_real_match_lineup(mid))
+    except Exception as e:
+        return jsonify({'available': False, 'error': str(e)})
+
+@app.route('/api/real_team_lineup')
+@login_required
+def api_real_team_lineup():
+    """Probabile formazione della prossima partita di una nazionale."""
+    team = (request.args.get('team') or '').strip()
+    if not LIVE_ENABLED:
+        return jsonify({'available': False, 'error': 'Fonte non configurata'})
+    if not team:
+        return jsonify({'available': False, 'error': 'parametro team mancante'})
+    try:
+        info = _team_next_match(team)
+        if not info or not info.get('mid'):
+            return jsonify({'available': False, 'reason': 'no_match',
+                            'date': (info or {}).get('date')})
+        lu = _real_match_lineup(info['mid'])
+        row = info.get('row') or {}
+        return jsonify({'available': lu.get('available', False), 'side': info.get('side'),
+                        'home': lu.get('home'), 'away': lu.get('away'),
+                        'match': {'home': row.get('home'), 'away': row.get('away'),
+                                  'status': row.get('status'), 'date': info.get('date'),
+                                  'kickoff': row.get('kickoff')}})
+    except Exception as e:
+        return jsonify({'available': False, 'error': str(e)})
 
 @app.route('/api/admin/live_config', methods=['GET'])
 @login_required

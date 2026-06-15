@@ -1229,6 +1229,62 @@ def _team_next_match(team):
             return {'mid': str(r.get('id')), 'side': 'away', 'row': r, 'date': date}
     return {'mid': None, 'side': None, 'row': None, 'date': date}
 
+def _team_match_on_date(team, date):
+    talias = _norm(_alias(team))
+    try:
+        rows = _real_day_matches(date)
+    except Exception:
+        rows = []
+    for r in rows:
+        nh, na = _norm(r.get('home', '')), _norm(r.get('away', ''))
+        if talias and talias == nh:
+            return {'mid': str(r.get('id')), 'side': 'home', 'row': r}
+        if talias and talias == na:
+            return {'mid': str(r.get('id')), 'side': 'away', 'row': r}
+    return None
+
+def _team_probable_lineup(team):
+    """Formazione probabile AUTOMATICA, a cascata:
+    1) formazione della PROSSIMA partita se già pubblicata (ufficiale);
+    2) altrimenti l'ULTIMA formazione schierata (probabile dall'ultima gara);
+    3) altrimenti nessuna (il client ripiega sulla probabile statica)."""
+    today = _time.strftime('%Y-%m-%d', _time.gmtime())
+    fixtures = []
+    for grp in WC_MATCH_SCHEDULE.values():
+        for m in grp:
+            if m['home'] == team or m['away'] == team:
+                d = WC_MATCH_DATES.get(m['id'])
+                if d:
+                    fixtures.append((d, m))
+    if not fixtures:
+        return {'available': False, 'reason': 'no_fixtures'}
+    fixtures.sort(key=lambda x: x[0])
+    dates = [d for d, _ in fixtures]
+    upcoming = [d for d in dates if d >= today]
+    played = [d for d in dates if d < today]
+    # ordine dei tentativi: prossima partita (ufficiale) -> ultima giocata (probabile)
+    attempts = []
+    if upcoming:
+        attempts.append(('live', upcoming[0]))
+    if played:
+        attempts.append(('last', played[-1]))
+    if not attempts:
+        attempts.append(('live', dates[0]))
+    for source, date in attempts:
+        info = _team_match_on_date(team, date)
+        if not info or not info.get('mid'):
+            continue
+        lu = _real_match_lineup(info['mid'])
+        if lu.get('available'):
+            row = info.get('row') or {}
+            return {'available': True, 'source': source, 'side': info['side'],
+                    'home': lu.get('home'), 'away': lu.get('away'),
+                    'match': {'home': row.get('home'), 'away': row.get('away'),
+                              'status': row.get('status'), 'date': date,
+                              'kickoff': row.get('kickoff')}}
+    return {'available': False, 'reason': 'no_lineup',
+            'date': (upcoming or played or dates)[0]}
+
 def _hl_status(desc):
     """Mappa lo stato Highlightly (state.description) ai nostri 3 stati."""
     d = (desc or '').lower()
@@ -1640,17 +1696,11 @@ def api_real_team_lineup():
     if not team:
         return jsonify({'available': False, 'error': 'parametro team mancante'})
     try:
-        info = _team_next_match(team)
-        if not info or not info.get('mid'):
-            return jsonify({'available': False, 'reason': 'no_match',
-                            'date': (info or {}).get('date')})
-        lu = _real_match_lineup(info['mid'])
-        row = info.get('row') or {}
-        return jsonify({'available': lu.get('available', False), 'side': info.get('side'),
-                        'home': lu.get('home'), 'away': lu.get('away'),
-                        'match': {'home': row.get('home'), 'away': row.get('away'),
-                                  'status': row.get('status'), 'date': info.get('date'),
-                                  'kickoff': row.get('kickoff')}})
+        info = _team_probable_lineup(team)
+        if not info.get('available'):
+            return jsonify({'available': False, 'reason': info.get('reason'),
+                            'date': info.get('date')})
+        return jsonify(info)
     except Exception as e:
         return jsonify({'available': False, 'error': str(e)})
 

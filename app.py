@@ -2050,6 +2050,25 @@ def admin_users():
     return jsonify({'count': len(users), 'users': users})
 
 # ── User profile ───────────────────────────────────────────────────────
+@app.route('/api/match_predictions')
+@login_required
+def api_match_predictions():
+    """Tutti i pronostici (gironi) dei membri di una lega, per la vista
+    'pronostici per partita'. Rivelati solo dopo il termine (i propri sempre)."""
+    me = session['email']
+    lid = (request.args.get('league') or '').strip()
+    if not lid or not _is_member(me, lid):
+        return jsonify({'error': 'Lega non valida'}), 400
+    reveal = deadline_passed()
+    members, preds = [], {}
+    for em in LEAGUES[lid].get('members', []):
+        p = PROFILES.get(em, {})
+        members.append({'email': em, 'nickname': p.get('nickname', em.split('@')[0]),
+                        'avatar': p.get('avatar', '⚽'), 'is_me': em == me})
+        if reveal or em == me:
+            preds[em] = PREDICTIONS.get(_lk(lid, em), {})
+    return jsonify({'reveal': reveal, 'members': members, 'predictions': preds})
+
 @app.route('/api/league_predictions')
 @login_required
 def league_predictions():

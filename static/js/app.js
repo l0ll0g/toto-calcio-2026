@@ -9,7 +9,7 @@ let S = {
   wcTab:'groups', wcGroup:'A', wcKoRound:0,
   selAvatar:'⚽', authMode:'login', authSubMode:'login', // authSubMode: login|register|forgot|reset
   myLeagues:[], activeLeague:null, activeLeagueId:null,
-  realDate:null, realData:null, realDetails:{}, realModal:null, realTab:'matches', realStandings:null, realStats:null, realLineups:{}, realModalTab:'summary', realLineupView:'pitch', teamLineup:{},
+  realDate:null, realData:null, realDetails:{}, realModal:null, realTab:'matches', realStandings:null, realStats:null, realLineups:{}, realModalTab:'summary', realLineupView:'pitch', teamLineup:{}, allPicks:null, allPicksMatch:null,
   topcorer:'', finalPred:{}, koPred:{}, koSubmitted:false,
   live:{matches:{},simulation:true,enabled:false}, _liveTimer:null,
   profileData:null,
@@ -186,6 +186,7 @@ function render() {
     case 'myresults':    root.innerHTML=html_myresults();   bind_myresults();    break;
     case 'competitor':   root.innerHTML=html_competitor();  bind_competitor();   break;
     case 'realmatches':  root.innerHTML=html_realmatches();  bind_realmatches();  break;
+    case 'allpicks':     root.innerHTML=html_allpicks();     bind_allpicks();     break;
   }
 }
 
@@ -256,6 +257,114 @@ function _mrCard(m, v, preds, label){
         ${_mrVerdictBadge(v)}
       </div>
     </div>`;
+}
+// ── Pronostici per partita (tutti i partecipanti) ──────────────────────────
+function _apResult(mid){
+  const r=S.results[mid];
+  if(r && r.score) return {score:r.score, pick:r.pick||_mrPick3(r.score), live:false};
+  const info=_mrLiveInfo(mid);
+  if(info && (info.status==='IN_PLAY'||info.status==='PAUSED') && info.score && info.score.includes('-'))
+    return {score:info.score, pick:_mrPick3(info.score), live:true, minute:info.minute};
+  return null;
+}
+function _apVerdict(pred, res){
+  if(!pred || (!pred.score && !pred.pick)) return 'none';
+  if(res.score && pred.score && pred.score===res.score) return 'exact';
+  const pp = pred.pick || (pred.score?_mrPick3(pred.score):null);
+  if(pp && res.pick && pp===res.pick) return 'correct';
+  return 'wrong';
+}
+const _AP_COL={exact:'#22c55e',correct:'#f5c850',wrong:'#fca5a5',none:'rgba(255,255,255,0.3)'};
+function _apPredText(pred, m){
+  if(!pred || (!pred.score && !pred.pick)) return '—';
+  if(pred.score) return pred.score.replace('-',' – ');
+  return ({'1':'1 ('+m.homeTeam.name+')','X':'X','2':'2 ('+m.awayTeam.name+')'})[pred.pick]||pred.pick;
+}
+async function loadAllPicks(){
+  if(!S.activeLeagueId){ S.allPicks={error:'no_league'}; render(); return; }
+  S.allPicks={loading:true}; render();
+  try{ S.allPicks=await api('/api/match_predictions?league='+encodeURIComponent(S.activeLeagueId)); }
+  catch(e){ S.allPicks={error:'net'}; }
+  render();
+}
+function _apModalHtml(mid){
+  const d=S.allPicks; const m=WC_ALL_MATCHES.find(x=>x.id===mid); if(!m||!d) return '';
+  const res=_apResult(mid)||{score:'?-?',pick:null};
+  const preds=d.predictions||{};
+  const rows=(d.members||[]).map(u=>{ const pr=(preds[u.email]||{})[mid]; return {u,pr,v:_apVerdict(pr,res)}; });
+  const order={exact:0,correct:1,wrong:2,none:3};
+  rows.sort((a,b)=> (order[a.v]-order[b.v]) || a.u.nickname.localeCompare(b.u.nickname));
+  const badge=(v)=>{
+    if(v==='exact')   return `<span class="badge-exact rounded-md px-2 py-0.5 text-[10px] font-bold whitespace-nowrap"><i class="fa-solid fa-star mr-1"></i>+3</span>`;
+    if(v==='correct') return `<span class="badge-correct rounded-md px-2 py-0.5 text-[10px] font-bold whitespace-nowrap"><i class="fa-solid fa-check mr-1"></i>+1</span>`;
+    if(v==='wrong')   return `<span class="badge-wrong rounded-md px-2 py-0.5 text-[10px] font-bold whitespace-nowrap">0</span>`;
+    return `<span class="text-white/25 text-[10px]">—</span>`;
+  };
+  const list=rows.map(({u,pr,v})=>`
+    <div class="flex items-center gap-3 py-2" style="border-bottom:1px solid rgba(255,255,255,0.05)">
+      <span class="text-lg flex-shrink-0">${u.avatar||'⚽'}</span>
+      <span class="text-white text-sm flex-1 min-w-0 truncate">${u.nickname}${u.is_me?' <span class="text-gold/70 text-xs">(tu)</span>':''}</span>
+      <span class="text-sm font-semibold flex-shrink-0" style="color:${_AP_COL[v]}">${_apPredText(pr,m)}</span>
+      ${badge(v)}
+    </div>`).join('');
+  const nE=rows.filter(r=>r.v==='exact').length, nC=rows.filter(r=>r.v==='correct').length;
+  return `<div class="ap-modal-backdrop fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" style="background:rgba(0,0,0,0.7)">
+    <div class="w-full sm:max-w-lg rounded-t-2xl sm:rounded-2xl p-4 max-h-[85vh] overflow-y-auto" style="background:#0e1525;border:1px solid rgba(255,255,255,0.1)">
+      <div class="flex items-center justify-between mb-3">
+        <span class="text-gold text-xs font-bold uppercase tracking-wider">${m.group?'Girone '+m.group+' · ':''}${m.round}</span>
+        <button class="ap-modal-close text-white/40 hover:text-white"><i class="fa-solid fa-xmark text-xl"></i></button>
+      </div>
+      <div class="grid items-center gap-2 mb-1" style="grid-template-columns:1fr auto 1fr">
+        <div class="flex items-center gap-2 flex-row-reverse">${flagImg(m.homeTeam.name,22)}<span class="text-white font-bold text-right leading-tight">${m.homeTeam.name}</span></div>
+        <div class="px-2 text-center"><span class="font-display text-2xl ${res.live?'':'text-gold'}" style="${res.live?'color:#22c55e':''}">${(res.score||'?-?').replace('-',' – ')}</span></div>
+        <div class="flex items-center gap-2">${flagImg(m.awayTeam.name,22)}<span class="text-white font-bold leading-tight">${m.awayTeam.name}</span></div>
+      </div>
+      <div class="text-center text-white/30 text-xs mb-3">${res.live?('● LIVE'+(res.minute?' '+res.minute+"'":'')):'risultato reale'} · <span style="color:#22c55e">${nE} esatti</span> · <span style="color:#f5c850">${nC} esito</span></div>
+      ${list||'<div class="text-white/30 text-sm text-center py-4">Nessun pronostico per questa partita.</div>'}
+    </div></div>`;
+}
+function html_allpicks(){
+  const d=S.allPicks;
+  const head = html_topbar({back:true,title:'PRONOSTICI PER PARTITA',subtitle:'Risultati reali e pronostici di tutti'});
+  const wrapMain=(inner)=>`${head}<main class="max-w-2xl mx-auto px-4 pb-24 pt-4">${inner}</main>${S.allPicksMatch?_apModalHtml(S.allPicksMatch):''}`;
+  if(!S.activeLeagueId) return wrapMain(`<div class="glass rounded-2xl p-6 text-center text-white/50 text-sm">Seleziona prima una lega dalla dashboard.</div>`);
+  if(!d || d.loading) return wrapMain(`<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm"><i class="fa-solid fa-spinner spinner mr-2"></i>Carico i pronostici…</div>`);
+  if(d.error==='no_league') return wrapMain(`<div class="glass rounded-2xl p-6 text-center text-white/50 text-sm">Seleziona prima una lega.</div>`);
+  if(d.error) return wrapMain(`<div class="glass rounded-2xl p-6 text-center text-white/40 text-sm">Errore di rete. Torna indietro e riprova.</div>`);
+  if(!d.reveal) return wrapMain(`<div class="glass rounded-2xl p-6 text-center text-white/50 text-sm"><i class="fa-solid fa-lock mr-2 text-gold/60"></i>I pronostici degli altri partecipanti saranno visibili dopo il termine.</div>`);
+  const matches = WC_ALL_MATCHES.filter(m=>_apResult(m.id)).slice().reverse();
+  if(!matches.length) return wrapMain(`<div class="glass rounded-2xl p-6 text-center text-white/50 text-sm">Ancora nessuna partita con risultato.</div>`);
+  const preds=d.predictions||{};
+  const rows = matches.map(m=>{
+    const res=_apResult(m.id);
+    let nExact=0,nCorrect=0,nTot=0;
+    (d.members||[]).forEach(u=>{ const v=_apVerdict((preds[u.email]||{})[m.id],res); if(v!=='none')nTot++; if(v==='exact')nExact++; else if(v==='correct')nCorrect++; });
+    return `<button class="ap-match w-full glass rounded-xl p-3 mb-2 text-left hover:border-gold/30 transition-all" data-id="${m.id}">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-gold text-[11px] font-bold uppercase tracking-wider">${m.group?'Girone '+m.group+' · ':''}${m.round}</span>
+        <span class="text-white/30 text-[11px]">${m.date}${res.live?` · <span style="color:#22c55e">● LIVE ${res.minute?res.minute+"'":''}</span>`:''}</span>
+      </div>
+      <div class="grid items-center gap-2" style="grid-template-columns:1fr auto 1fr">
+        <div class="flex items-center gap-2 flex-row-reverse">${flagImg(m.homeTeam.name,18)}<span class="text-white font-semibold text-sm text-right leading-tight">${m.homeTeam.name}</span></div>
+        <div class="px-2 text-center"><span class="font-display text-xl ${res.live?'':'text-gold'}" style="${res.live?'color:#22c55e':''}">${(res.score||'?-?').replace('-',' – ')}</span></div>
+        <div class="flex items-center gap-2">${flagImg(m.awayTeam.name,18)}<span class="text-white font-semibold text-sm leading-tight">${m.awayTeam.name}</span></div>
+      </div>
+      <div class="flex items-center gap-3 pt-2 mt-2 text-[11px]" style="border-top:1px solid rgba(255,255,255,0.06)">
+        <span style="color:#22c55e"><i class="fa-solid fa-circle mr-1" style="font-size:7px"></i>${nExact} esatti</span>
+        <span style="color:#f5c850"><i class="fa-solid fa-circle mr-1" style="font-size:7px"></i>${nCorrect} esito</span>
+        <span class="text-white/30 ml-auto">${nTot} pronostici <i class="fa-solid fa-chevron-right ml-1"></i></span>
+      </div>
+    </button>`;
+  }).join('');
+  return wrapMain(rows);
+}
+function bind_allpicks(){
+  bind_topbar_events();
+  if(!S.allPicks) { loadAllPicks(); return; }
+  document.querySelectorAll('.ap-match').forEach(el=>el.addEventListener('click', ()=>{ S.allPicksMatch=el.dataset.id; render(); }));
+  const close=()=>{ S.allPicksMatch=null; render(); };
+  document.querySelector('.ap-modal-backdrop')?.addEventListener('click', (e)=>{ if(e.target.classList.contains('ap-modal-backdrop')) close(); });
+  document.querySelector('.ap-modal-close')?.addEventListener('click', close);
 }
 function html_myresults(){
   const hasLeague = !!S.activeLeagueId;
@@ -869,7 +978,7 @@ function bind_topbar_events() {
   document.getElementById('btn-back')?.addEventListener('click', () => {
     // Teams detail → teams list; teams list → dashboard
     if (S.view === 'teams' && S.teamsTeam) { S.teamsTeam = null; render(); return; }
-    if (S.view==='worldcup'||S.view==='leagueDetail'||S.view==='teams'||S.view==='admin'||S.view==='myresults'||S.view==='competitor'||S.view==='realmatches') nav('dashboard');
+    if (S.view==='worldcup'||S.view==='leagueDetail'||S.view==='teams'||S.view==='admin'||S.view==='myresults'||S.view==='competitor'||S.view==='realmatches'||S.view==='allpicks') nav('dashboard');
     else if (S.view==='profile') nav(S._prevView||'dashboard');
     else nav('dashboard');
   });
@@ -1398,6 +1507,18 @@ function html_dash() {
         <i class="fa-solid fa-arrow-right text-gold/50 text-sm flex-shrink-0"></i>
       </button>
 
+      <!-- Pronostici per partita (tutti i partecipanti) -->
+      <button id="btn-allpicks" class="w-full glass rounded-2xl p-4 mb-5 flex items-center gap-4 hover:border-gold/30 transition-all text-left">
+        <div class="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0" style="background:rgba(139,92,246,0.1);border:1px solid rgba(139,92,246,0.25)">
+          <i class="fa-solid fa-users text-xl" style="color:#a78bfa"></i>
+        </div>
+        <div class="flex-1">
+          <div class="font-display text-lg text-white tracking-wide">PRONOSTICI PER PARTITA</div>
+          <div class="text-white/35 text-xs">Risultati reali e i pronostici di tutti i partecipanti, partita per partita</div>
+        </div>
+        <i class="fa-solid fa-arrow-right text-gold/50 text-sm flex-shrink-0"></i>
+      </button>
+
       <!-- Special predictions strip -->
       <div class="mb-8">
         <!-- Topscorer -->
@@ -1489,6 +1610,7 @@ function bind_dash() {
   document.getElementById('btn-manage-leagues')?.addEventListener('click', () => nav('leagues'));
   document.getElementById('btn-myresults')?.addEventListener('click', () => nav('myresults'));
   document.getElementById('btn-realmatches')?.addEventListener('click', () => nav('realmatches'));
+  document.getElementById('btn-allpicks')?.addEventListener('click', () => { S.allPicks=null; S.allPicksMatch=null; nav('allpicks'); });
   document.querySelectorAll('.lb-click').forEach(el => {
     el.addEventListener('click', async () => {
       if (!S.activeLeagueId) return;

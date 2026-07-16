@@ -2871,6 +2871,19 @@ function html_admin() {
         <div id="mem-status" class="text-xs mt-2"></div>
       </div>
 
+      <!-- Punti manuali: capocannoniere + finale -->
+      <div class="glass rounded-2xl p-5 mb-5">
+        <div class="font-display text-lg text-white tracking-wide mb-2"><i class="fa-solid fa-star text-gold mr-2"></i>PUNTI FINALE E CAPOCANNONIERE</div>
+        <p class="text-white/40 text-sm mb-4">Questi punti sono già assegnati in automatico in base all'esito reale che imposti qui sotto. Usa questa sezione solo per <strong class="text-white/60">forzare a mano</strong> il punteggio di un concorrente (es. nome del capocannoniere scritto in modo diverso). Lascia il campo vuoto per tornare al calcolo automatico.</p>
+        <select id="bon-league" class="w-full px-3 py-2 rounded-lg text-sm mb-3" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#fff;outline:none">
+          <option value="">— scegli la lega —</option>
+          ${(S.myLeagues||[]).map(l=>`<option value="${l.id}">${l.name}</option>`).join('')}
+        </select>
+        <div id="bon-real" class="text-xs text-white/40 mb-3"></div>
+        <div id="bon-list" class="space-y-2"></div>
+        <div id="bon-status" class="text-xs mt-2"></div>
+      </div>
+
       <!-- Special results (capocannoniere + finale) -->
       <div class="glass rounded-2xl p-5 mb-5">
         <div class="font-display text-lg text-white tracking-wide mb-4">
@@ -3212,6 +3225,75 @@ function bind_admin() {
     catch(e){ if (list) list.innerHTML = '<div class="text-red-300 text-sm">Errore.</div>'; }
   }
   document.getElementById('mem-league')?.addEventListener('change', e => memLoad(e.target.value));
+
+  // ── Punti manuali: finale + capocannoniere ──
+  const bonStatus = (msg, ok) => {
+    const st = document.getElementById('bon-status');
+    if (st) { st.textContent = msg; st.style.color = ok ? '#22c55e' : '#fca5a5'; }
+  };
+  const bonRender = (data) => {
+    const list = document.getElementById('bon-list');
+    const real = document.getElementById('bon-real');
+    if (!list) return;
+    if (real) real.innerHTML = (data && (data.real_topscorer || data.real_final))
+      ? `Esito reale impostato — capocannoniere: <span class="text-white/70">${data.real_topscorer||'—'}</span> · finale: <span class="text-white/70">${data.real_final||'—'}</span>`
+      : `<i class="fa-solid fa-circle-info mr-1"></i>Nessun esito reale impostato: senza di esso l'automatico assegna 0 punti.`;
+    if (!data || !data.members || !data.members.length) { list.innerHTML = '<div class="text-white/30 text-sm">Nessun membro.</div>'; return; }
+    const cell = (m, field, manual, auto) => `
+      <div class="flex-1 min-w-0">
+        <div class="text-white/35 text-[10px] uppercase tracking-wider mb-0.5">${field==='topscorer'?'Capocannoniere':'Finale'}</div>
+        <input class="bon-in w-full px-2 py-1.5 rounded-lg text-sm" data-email="${m.email}" data-field="${field}"
+          type="number" inputmode="numeric" placeholder="auto: ${auto}" value="${manual!=null?manual:''}"
+          style="background:rgba(255,255,255,0.06);border:1px solid ${manual!=null?'rgba(200,164,74,0.45)':'rgba(255,255,255,0.12)'};color:#fff;outline:none">
+      </div>`;
+    list.innerHTML = data.members.map(m => `
+      <div class="p-3 rounded-lg" style="background:rgba(255,255,255,0.03)">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="text-base">${m.avatar}</span>
+          <div class="flex-1 min-w-0">
+            <div class="text-white text-sm font-semibold truncate">${m.nickname}</div>
+            <div class="text-white/30 text-[11px] truncate">capocann.: ${m.topscorer_pred||'—'} · finale: ${m.final_pred||'—'}</div>
+          </div>
+          <div class="text-right flex-shrink-0">
+            <div class="font-display text-lg text-gold leading-none">${m.total}</div>
+            <div class="text-white/30 text-[10px]">punti tot.</div>
+          </div>
+        </div>
+        <div class="flex items-end gap-2">
+          ${cell(m,'topscorer',m.manual_topscorer,m.auto_topscorer)}
+          ${cell(m,'final',m.manual_final,m.auto_final)}
+          <button class="bon-save px-3 py-1.5 rounded-lg text-xs font-bold flex-shrink-0" data-email="${m.email}"
+            style="background:rgba(200,164,74,0.15);border:1px solid rgba(200,164,74,0.35);color:#C8A44A"><i class="fa-solid fa-check"></i></button>
+          <button class="bon-reset px-3 py-1.5 rounded-lg text-xs font-bold flex-shrink-0" data-email="${m.email}" title="Torna al calcolo automatico"
+            style="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.55)"><i class="fa-solid fa-rotate-left"></i></button>
+        </div>
+      </div>`).join('');
+    const send = async (email, payload) => {
+      const lid = document.getElementById('bon-league').value;
+      if (!lid) return;
+      try {
+        const r = await api('/api/admin/bonus_points', {method:'POST', body:Object.assign({league:lid, email}, payload)});
+        if (r.ok) { bonStatus(`Aggiornato: ${email} → capocann. ${r.topscorer_pts} pt, finale ${r.final_pts} pt (totale ${r.total}).`, true); bonLoad(lid); }
+        else bonStatus(r.error || 'Errore', false);
+      } catch(e){ bonStatus('Errore di rete', false); }
+    };
+    document.querySelectorAll('.bon-save').forEach(b => b.addEventListener('click', () => {
+      const email = b.dataset.email;
+      const val = (f) => { const el = document.querySelector(`.bon-in[data-email="${email}"][data-field="${f}"]`); const v = (el?.value ?? '').trim(); return v===''?null:v; };
+      send(email, {topscorer: val('topscorer'), final: val('final')});
+    }));
+    document.querySelectorAll('.bon-reset').forEach(b => b.addEventListener('click', () => {
+      send(b.dataset.email, {topscorer:null, final:null});
+    }));
+  };
+  async function bonLoad(lid) {
+    const list = document.getElementById('bon-list');
+    if (!lid) { if (list) list.innerHTML = ''; const r=document.getElementById('bon-real'); if(r) r.innerHTML=''; return; }
+    if (list) list.innerHTML = '<div class="text-white/30 text-sm"><i class="fa-solid fa-spinner spinner mr-1"></i>Carico…</div>';
+    try { bonRender(await api('/api/admin/bonus_points?league=' + encodeURIComponent(lid))); }
+    catch(e){ if (list) list.innerHTML = '<div class="text-red-300 text-sm">Errore.</div>'; }
+  }
+  document.getElementById('bon-league')?.addEventListener('change', e => bonLoad(e.target.value));
 }
 
 function renderAdminMatches() {

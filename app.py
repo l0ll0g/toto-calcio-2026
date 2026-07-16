@@ -128,6 +128,7 @@ TOPSCORER_PRED = PersistentDict('topscorer_pred')  # email -> player_name
 FINAL_PRED     = PersistentDict('final_pred')      # email -> {home, away, winner, score}
 # Real outcomes for special bets (admin sets these)
 SPECIAL_RESULTS = PersistentDict('special_results')  # 'topscorer'->name, 'final'->{home,away,winner,score}
+BONUS_PTS = PersistentDict('bonus_pts')  # 'lid|email' -> {'topscorer': int|None, 'final': int|None} (override manuale admin)
 LIVE_CONFIG = PersistentDict('live_config')  # fonte live runtime: 'league_id','season','by_date' ('0'/'1')
 
 def _live_cfg(key, default):
@@ -703,12 +704,44 @@ def _league_leaderboard(lid):
     board.sort(key=lambda x:-x['points'])
     return board
 
+def _auto_topscorer_pts(k):
+    """Punti automatici capocannoniere: 5 se il pronostico coincide con l'esito reale."""
+    ts_real = SPECIAL_RESULTS.get('topscorer')
+    if ts_real and TOPSCORER_PRED.get(k) == ts_real:
+        return 5
+    return 0
+
+def _auto_final_pts(k):
+    """Punti automatici finale: 2 finaliste giuste = 5, 1 sola = 3."""
+    fin_real = SPECIAL_RESULTS.get('final')  # {home,away,winner,score}
+    fp = FINAL_PRED.get(k)
+    if fin_real and fp:
+        real_teams = {t for t in (fin_real.get('home'), fin_real.get('away')) if t}
+        pred_teams = {t for t in (fp.get('home'), fp.get('away')) if t}
+        hit = len(real_teams & pred_teams)
+        if hit >= 2:
+            return 5
+        if hit == 1:
+            return 3
+    return 0
+
+def _special_pts(k):
+    """Punti di capocannoniere e finale, con eventuale OVERRIDE manuale dell'admin.
+    Ritorna (ts_pts, fin_pts, ts_manual, fin_manual)."""
+    b = BONUS_PTS.get(k) or {}
+    ts_m = b.get('topscorer')
+    fin_m = b.get('final')
+    ts_pts = int(ts_m) if ts_m is not None else _auto_topscorer_pts(k)
+    fin_pts = int(fin_m) if fin_m is not None else _auto_final_pts(k)
+    return ts_pts, fin_pts, ts_m, fin_m
+
 def _calc_points(email, lid):
     """Punteggio dell'utente IN UNA LEGA specifica.
     Categorie a punti (regolamento aggiornato):
       • Fase a gironi: risultato esatto = 3pt, solo esito 1/X/2 = 1pt
       • Capocannoniere indovinato = +5pt
       • Finale: entrambe le finaliste indovinate = 5pt, una sola = 3pt
+    L'admin può forzare a mano i punti di capocannoniere/finale (override).
     La fase a eliminazione diretta NON assegna punti.
     Ritorna (punti, esiti_corretti, risultati_esatti)."""
     pts=0; correct=0; exact=0
@@ -723,22 +756,9 @@ def _calc_points(email, lid):
         elif pred.get('pick') == res.get('pick'):
             pts+=1; correct+=1
 
-    # 2) Capocannoniere (+5)
-    ts_real = SPECIAL_RESULTS.get('topscorer')
-    if ts_real and TOPSCORER_PRED.get(k) == ts_real:
-        pts += 5
-
-    # 3) Finale: 2 finaliste giuste = 5pt, 1 sola = 3pt (nessun bonus vincitore)
-    fin_real = SPECIAL_RESULTS.get('final')  # {home,away,winner,score}
-    fp = FINAL_PRED.get(k)
-    if fin_real and fp:
-        real_teams = {t for t in (fin_real.get('home'), fin_real.get('away')) if t}
-        pred_teams = {t for t in (fp.get('home'), fp.get('away')) if t}
-        hit = len(real_teams & pred_teams)
-        if hit >= 2:
-            pts += 5
-        elif hit == 1:
-            pts += 3
+    # 2+3) Capocannoniere e Finale (automatici o forzati dall'admin)
+    ts_pts, fin_pts, _, _ = _special_pts(k)
+    pts += ts_pts + fin_pts
 
     return pts, correct, exact
 
@@ -1859,6 +1879,77 @@ def admin_import_predictions():
     return jsonify({'ok': True, 'imported': count, 'groups': sorted(groups),
                     'ko': ko_count, 'topscorer': ts_set, 'final': fp_set,
                     'email': email, 'league': LEAGUES[lid]['name']})
+
+@app.route('/api/admin/bonus_points')
+@login_required
+@admin_required
+def admin_bonus_points():
+    """Elenco membri di una lega con pronostici speciali, punti automatici
+    e eventuale override manuale (capocannoniere / finale)."""
+    lid = (request.args.get('league') or '').strip()
+    if lid not in LEAGUES:
+        return jsonify({'error': 'Lega non valida'}), 400
+    lg = LEAGUES[lid]
+    ts_real = SPECIAL_RESULTS.get('topscorer', '')
+    fin_real = SPECIAL_RESULTS.get('final', {}) or {}
+    out = []
+    for em in lg.get('members', []):
+        p = PROFILES.get(em, {})
+        k = _lk(lid, em)
+        ts_pts, fin_pts, ts_m, fin_m = _special_pts(k)
+        fp = FINAL_PRED.get(k, {}) or {}
+        out.append({
+            'email': em,
+            'nickname': p.get('nickname', em.split('@')[0]),
+            'avatar': p.get('avatar', '⚽'),
+            'topscorer_pred': TOPSCORER_PRED.get(k, ''),
+            'final_pred': f"{fp.get('home','')} - {fp.get('away','')}".strip(' -'),
+            'auto_topscorer': _auto_topscorer_pts(k),
+            'auto_final': _auto_final_pts(k),
+            'manual_topscorer': ts_m,
+            'manual_final': fin_m,
+            'topscorer_pts': ts_pts,
+            'final_pts': fin_pts,
+            'total': _calc_points(em, lid)[0],
+        })
+    return jsonify({'league': lg['name'], 'members': out,
+                    'real_topscorer': ts_real,
+                    'real_final': f"{fin_real.get('home','')} - {fin_real.get('away','')}".strip(' -')})
+
+@app.route('/api/admin/bonus_points', methods=['POST'])
+@login_required
+@admin_required
+def admin_set_bonus_points():
+    """Forza (o azzera) i punti di capocannoniere/finale per un concorrente.
+    Valore numerico = override manuale; null/'' = torna al calcolo automatico."""
+    d = request.json or {}
+    lid = (d.get('league') or '').strip()
+    email = (d.get('email') or '').strip().lower()
+    if lid not in LEAGUES:
+        return jsonify({'error': 'Lega non valida'}), 400
+    if email not in LEAGUES[lid].get('members', []):
+        return jsonify({'error': 'Utente non membro di questa lega'}), 400
+    k = _lk(lid, email)
+    cur = dict(BONUS_PTS.get(k) or {})
+    for field in ('topscorer', 'final'):
+        if field in d:
+            v = d.get(field)
+            if v in (None, ''):
+                cur.pop(field, None)          # torna all'automatico
+            else:
+                try:
+                    cur[field] = int(v)
+                except (TypeError, ValueError):
+                    return jsonify({'error': f'Valore non valido per {field}'}), 400
+    if cur:
+        BONUS_PTS[k] = cur
+    elif k in BONUS_PTS:
+        del BONUS_PTS[k]
+    ts_pts, fin_pts, ts_m, fin_m = _special_pts(k)
+    return jsonify({'ok': True, 'email': email,
+                    'topscorer_pts': ts_pts, 'final_pts': fin_pts,
+                    'manual_topscorer': ts_m, 'manual_final': fin_m,
+                    'total': _calc_points(email, lid)[0]})
 
 @app.route('/api/admin/league_members')
 @login_required
